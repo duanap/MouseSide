@@ -19,7 +19,7 @@ namespace ms {
 
 // ---- 常量 ----
 constexpr wchar_t kAppName[]       = L"MouseSide";
-constexpr wchar_t kVersionText[]   = L"v1.0.0";
+constexpr wchar_t kVersionText[]   = L"v1.0.1";
 constexpr wchar_t kMutexName[]     = L"MouseSide_SingleInstance_5A1DC4";
 constexpr wchar_t kHiddenClass[]   = L"MouseSide_HiddenWindow";
 constexpr wchar_t kSettingsClass[] = L"MouseSide_SettingsWindow";
@@ -64,6 +64,22 @@ struct Hotkey {
     bool win = false;
     bool IsEmpty() const { return vk == 0; }
 };
+
+constexpr bool IsModifierKey(unsigned vk) {
+    switch (vk) {
+        case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL:
+        case VK_MENU: case VK_LMENU: case VK_RMENU:
+        case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT:
+        case VK_LWIN: case VK_RWIN: return true;
+        default: return false;
+    }
+}
+
+constexpr bool IsShortcutMainKey(unsigned vk) {
+    return vk > 0 && vk < 255 && !IsModifierKey(vk) &&
+           vk != VK_LBUTTON && vk != VK_RBUTTON && vk != VK_MBUTTON &&
+           vk != VK_XBUTTON1 && vk != VK_XBUTTON2;
+}
 
 struct Mapping {
     ActionKind kind = ActionKind::Preset;

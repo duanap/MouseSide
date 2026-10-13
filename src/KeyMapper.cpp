@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <array>
 
 namespace ms {
 namespace keymap {
@@ -16,55 +17,85 @@ void AppendKey(std::vector<INPUT>& inputs, WORD vk, bool up) {
     INPUT in{};
     in.type = INPUT_KEYBOARD;
     in.ki.wVk = vk;
-    in.ki.wScan = static_cast<WORD>(MapVirtualKeyW(vk, MAPVK_VK_TO_VSC));
+    const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC_EX);
+    in.ki.wScan = LOBYTE(scan);
+    if (HIBYTE(scan) == 0xE0) in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+    // Some keyboard layouts omit the E0 prefix from MapVirtualKey's result.
+    // These virtual keys still denote dedicated extended keys, not numpad keys.
+    switch (vk) {
+        case VK_RCONTROL: case VK_RMENU: case VK_LWIN: case VK_RWIN:
+        case VK_APPS: case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN:
+        case VK_HOME: case VK_END: case VK_PRIOR: case VK_NEXT:
+        case VK_INSERT: case VK_DELETE: case VK_DIVIDE: case VK_NUMLOCK:
+        case VK_SNAPSHOT:
+            in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+            break;
+        default: break;
+    }
     if (up) in.ki.dwFlags |= KEYEVENTF_KEYUP;
     inputs.push_back(in);
 }
 
-// 发送组合键：修饰键 down -> 主键 down/up -> 修饰键 up
-// 若物理键盘上按下了本次组合不需要的修饰键，先释放，发送完成后（仍处于按下状态时）补回，
-// 避免物理修饰键污染目标组合。
-void SendHotkey(const Hotkey& hk) {
-    if (hk.IsEmpty()) return;
+// Preserve required held modifiers; neutralize and restore both sides of
+// unwanted modifiers within one ordered batch. Unwind any partial insertion.
+bool SendHotkey(const Hotkey& hk) {
+    if (!IsShortcutMainKey(hk.vk)) return false;
 
-    const int modifiers[4][2] = {
-        {VK_CONTROL, static_cast<int>(hk.ctrl)},
-        {VK_MENU,    static_cast<int>(hk.alt)},
-        {VK_SHIFT,   static_cast<int>(hk.shift)},
-        {VK_LWIN,    static_cast<int>(hk.win)},
+    const WORD modifiers[4][2] = {
+        {VK_LCONTROL, VK_RCONTROL}, {VK_LMENU, VK_RMENU},
+        {VK_LSHIFT, VK_RSHIFT}, {VK_LWIN, VK_RWIN}
     };
-
-    int released[4] = {0, 0, 0, 0};
+    const bool wanted[4] = {hk.ctrl, hk.alt, hk.shift, hk.win};
+    std::array<bool, 256> original{};
+    original[hk.vk] = PhysicallyDown(static_cast<int>(hk.vk));
+    for (const auto& pair : modifiers) for (WORD vk : pair) original[vk] = PhysicallyDown(vk);
+    bool injected[4]{};
     std::vector<INPUT> inputs;
-    inputs.reserve(12);
+    inputs.reserve(24);
 
     for (int i = 0; i < 4; ++i) {
-        const int vk = modifiers[i][0];
-        if (!modifiers[i][1] && PhysicallyDown(vk)) {
-            AppendKey(inputs, static_cast<WORD>(vk), true);
-            released[i] = 1;
-        }
+        if (!wanted[i]) for (WORD vk : modifiers[i])
+            if (original[vk]) AppendKey(inputs, vk, true);
     }
     for (int i = 0; i < 4; ++i) {
-        if (modifiers[i][1]) AppendKey(inputs, static_cast<WORD>(modifiers[i][0]), false);
+        if (wanted[i] && !original[modifiers[i][0]] && !original[modifiers[i][1]]) {
+            AppendKey(inputs, modifiers[i][0], false);
+            injected[i] = true;
+        }
     }
 
     AppendKey(inputs, static_cast<WORD>(hk.vk), false);
-    AppendKey(inputs, static_cast<WORD>(hk.vk), true);
+    if (!original[hk.vk]) AppendKey(inputs, static_cast<WORD>(hk.vk), true);
 
     for (int i = 3; i >= 0; --i) {
-        if (modifiers[i][1]) AppendKey(inputs, static_cast<WORD>(modifiers[i][0]), true);
+        if (injected[i]) AppendKey(inputs, modifiers[i][0], true);
     }
     for (int i = 0; i < 4; ++i) {
-        // 仅当用户仍按住时才补回，避免留下"卡住"的修饰键
-        if (released[i] && PhysicallyDown(modifiers[i][0])) {
-            AppendKey(inputs, static_cast<WORD>(modifiers[i][0]), false);
-        }
+        if (!wanted[i]) for (WORD vk : modifiers[i])
+            if (original[vk]) AppendKey(inputs, vk, false);
     }
 
-    if (!inputs.empty()) {
-        SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
+    SetLastError(ERROR_SUCCESS);
+    const UINT sent = SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT));
+    if (sent == inputs.size()) return true;
+    const DWORD error = GetLastError();
+    if (sent > 0) {
+        auto state = original;
+        std::array<bool, 256> touched{};
+        for (UINT i = 0; i < sent && i < inputs.size(); ++i) {
+            const WORD vk = inputs[i].ki.wVk;
+            state[vk] = (inputs[i].ki.dwFlags & KEYEVENTF_KEYUP) == 0;
+            touched[vk] = true;
+        }
+        std::vector<INPUT> recovery;
+        for (unsigned vk = 1; vk < 256; ++vk)
+            if (touched[vk] && state[vk] && !original[vk]) AppendKey(recovery, static_cast<WORD>(vk), true);
+        for (unsigned vk = 1; vk < 256; ++vk)
+            if (touched[vk] && !state[vk] && original[vk]) AppendKey(recovery, static_cast<WORD>(vk), false);
+        if (!recovery.empty()) SendInput(static_cast<UINT>(recovery.size()), recovery.data(), sizeof(INPUT));
     }
+    SetLastError(error);
+    return false;
 }
 
 const wchar_t* FallbackKeyName(unsigned vk) {
@@ -176,18 +207,21 @@ std::wstring MappingText(const Mapping& m) {
     return L"已禁用";
 }
 
-void Execute(const Mapping& m) {
+bool Execute(const Mapping& m) {
+    try {
     switch (m.kind) {
         case ActionKind::Preset:
-            SendHotkey(PresetHotkey(m.preset));
-            break;
+            return SendHotkey(PresetHotkey(m.preset));
         case ActionKind::Custom:
-            if (!m.hotkey.IsEmpty()) SendHotkey(m.hotkey);
-            break;
+            return SendHotkey(m.hotkey);
         case ActionKind::Original:
         case ActionKind::Disabled:
-            break;
+            return true;
     }
+    } catch (...) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    return false;
 }
 
 }  // namespace keymap

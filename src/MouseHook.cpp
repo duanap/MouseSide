@@ -12,6 +12,7 @@ Mapping g_mappings[2]{};
 // 记录该键的按下事件是否被拦截，保证对应的松开事件也被拦截，
 // 避免浏览器收到"孤儿" up 事件。
 bool g_blocked[2] = {false, false};
+bool g_pressed[2] = {false, false};
 
 bool ShouldBlock(int index) {
     if (!g_enabled) return false;
@@ -35,12 +36,18 @@ LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
             case WM_NCXBUTTONDOWN: {
                 const int index = ButtonIndexFromData(info->mouseData);
                 if (index >= 0) {
-                    const bool block = ShouldBlock(index);
-                    g_blocked[index] = block;
-                    if (block && g_target) {
-                        // 钩子回调保持轻量：只投递消息，由窗口过程执行模拟输入
-                        PostMessageW(g_target, WM_MS_EXEC_MAPPING, static_cast<WPARAM>(index), 0);
+                    if (g_pressed[index]) {
+                        handled = g_blocked[index];
+                        break;
                     }
+                    g_pressed[index] = true;
+                    bool block = ShouldBlock(index);
+                    if (block && g_mappings[index].kind != ActionKind::Disabled) {
+                        // 钩子回调保持轻量：只投递消息，由窗口过程执行模拟输入
+                        block = g_target && PostMessageW(g_target, WM_MS_EXEC_MAPPING,
+                                                       static_cast<WPARAM>(index), 0);
+                    }
+                    g_blocked[index] = block;
                     handled = block;
                 }
                 break;
@@ -50,9 +57,12 @@ LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
             case WM_XBUTTONDBLCLK:
             case WM_NCXBUTTONDBLCLK: {
                 const int index = ButtonIndexFromData(info->mouseData);
-                if (index >= 0 && g_blocked[index]) {
-                    if (wParam == WM_XBUTTONUP || wParam == WM_NCXBUTTONUP) g_blocked[index] = false;
-                    handled = true;  // 吞掉，避免重复触发与原始前进/后退
+                if (index >= 0) {
+                    handled = g_blocked[index];
+                    if (wParam == WM_XBUTTONUP || wParam == WM_NCXBUTTONUP) {
+                        g_blocked[index] = false;
+                        g_pressed[index] = false;
+                    }
                 }
                 break;
             }
@@ -70,6 +80,7 @@ bool Install(HWND target) {
     if (g_hook) return true;
     g_target = target;
     g_blocked[0] = g_blocked[1] = false;
+    g_pressed[0] = g_pressed[1] = false;
     g_hook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc, nullptr, 0);
     return g_hook != nullptr;
 }
@@ -80,6 +91,7 @@ void Uninstall() {
         g_hook = nullptr;
     }
     g_blocked[0] = g_blocked[1] = false;
+    g_pressed[0] = g_pressed[1] = false;
 }
 
 bool Installed() {
@@ -88,7 +100,7 @@ bool Installed() {
 
 void SetEnabled(bool enabled) {
     g_enabled = enabled;
-    g_blocked[0] = g_blocked[1] = false;
+    // A consumed down must keep its paired up consumed across a pause/update.
 }
 
 void SetMappings(const Mapping& m4, const Mapping& m5) {

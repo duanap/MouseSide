@@ -21,6 +21,7 @@ namespace {
 AppConfig g_config{};
 HINSTANCE g_hInst = nullptr;
 HWND g_hidden = nullptr;
+UINT g_taskbarCreated = 0;
 
 bool CommandLineHas(PWSTR cmdLine, const wchar_t* arg) {
     if (!cmdLine || !arg) return false;
@@ -30,11 +31,11 @@ bool CommandLineHas(PWSTR cmdLine, const wchar_t* arg) {
 void EnablePerMonitorDpi() {
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (!user32) return;
-    using CtxFn = BOOL(WINAPI*)(int);
+    using CtxFn = BOOL(WINAPI*)(HANDLE);
     auto setCtx = reinterpret_cast<CtxFn>(GetProcAddress(user32, "SetProcessDpiAwarenessContext"));
     if (setCtx) {
         // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
-        setCtx(-4);
+        setCtx(reinterpret_cast<HANDLE>(static_cast<INT_PTR>(-4)));
         return;
     }
     auto setAware = reinterpret_cast<BOOL(WINAPI*)(void)>(
@@ -50,19 +51,37 @@ void QuitApp() {
 }
 
 LRESULT CALLBACK HiddenProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (g_taskbarCreated && msg == g_taskbarCreated) {
+        if (!tray::Restore()) {
+            settings::Show(hwnd);
+            MessageBoxW(hwnd, L"无法恢复系统托盘图标。可在设置窗口暂停映射或退出程序。",
+                        kAppName, MB_ICONWARNING | MB_OK);
+        }
+        return 0;
+    }
     switch (msg) {
         case WM_MS_EXEC_MAPPING: {
             // 由钩子投递：在这里执行模拟输入，保证钩子回调足够轻量
+            if (!g_config.enabled || wp > 1) return 0;
             const int index = static_cast<int>(wp);
             const Mapping& m = (index == 0) ? g_config.button4 : g_config.button5;
-            keymap::Execute(m);
+            if (!keymap::Execute(m)) {
+                g_config.enabled = false;
+                ApplyConfig();
+                settings::Show(hwnd);
+                MessageBoxW(hwnd,
+                    L"快捷键输入未能完整发送，已暂停侧键映射，后续点击将恢复鼠标原始功能。\n"
+                    L"高权限窗口、其他输入拦截程序或安全桌面可能限制模拟输入。\n"
+                    L"请返回普通应用后再启用映射。",
+                    kAppName, MB_ICONWARNING | MB_OK);
+            }
             return 0;
         }
         case WM_MS_SHOW_SETTINGS:
             settings::Show(hwnd);
             return 0;
         case WM_MS_TRAY:
-            switch (lp) {
+            switch (tray::EventMessage(lp)) {
                 case WM_LBUTTONDBLCLK:
                     settings::Show(hwnd);
                     break;
@@ -118,6 +137,7 @@ LRESULT CALLBACK HiddenProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 bool RegisterHiddenClass() {
+    g_taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = HiddenProc;
@@ -136,7 +156,12 @@ void ApplyConfig() {
     mousehook::SetEnabled(g_config.enabled);
     mousehook::SetMappings(g_config.button4, g_config.button5);
     tray::Update(g_config.enabled);
-    config::Save(g_config);
+    if (!config::Save(g_config)) {
+        settings::Show(g_hidden);
+        const std::wstring text = L"无法保存配置，当前修改仅在本次运行生效。\n"
+            L"请检查文件是否只读、目录权限及磁盘空间：\n" + config::Path();
+        MessageBoxW(g_hidden, text.c_str(), kAppName, MB_ICONWARNING | MB_OK);
+    }
     settings::RefreshFromConfig();
 }
 
@@ -191,15 +216,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR cmdLine, int) {
     mousehook::SetMappings(g_config.button4, g_config.button5);
     mousehook::SetEnabled(g_config.enabled);
 
-    if (!tray::Add(g_hidden, hInstance)) {
+    const bool trayAvailable = tray::Add(g_hidden, hInstance);
+    if (!trayAvailable) {
         // 托盘不可用不阻断核心功能，但必须让用户知道如何退出
-        MessageBoxW(nullptr, L"系统托盘图标添加失败，程序仍将在后台运行。\n"
-                             L"需要退出时请重新运行 MouseSide.exe 打开设置窗口。",
+        settings::Show(g_hidden);
+        MessageBoxW(nullptr, L"系统托盘图标添加失败，已打开设置窗口。\n"
+                             L"可在设置窗口暂停映射或点击“退出程序”。",
                     kAppName, MB_ICONWARNING | MB_OK);
     }
     tray::Update(g_config.enabled);
 
-    if (firstRun && !startupLaunch) settings::Show(g_hidden);
+    if (!startupLaunch || !trayAvailable) settings::Show(g_hidden);
+    if (firstRun) ApplyConfig();
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {

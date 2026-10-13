@@ -3,7 +3,7 @@
   <assemblyIdentity
     type="win32"
     name="MouseSide.MouseSide"
-    version="1.0.0.0"
+    version="1.0.1.0"
     processorArchitecture="amd64"/>
   <description>MouseSide - Windows mouse side button mapper</description>
   <dependency>

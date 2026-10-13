@@ -19,7 +19,8 @@ std::wstring HotkeyText(const Hotkey& hk);
 std::wstring MappingText(const Mapping& m);
 
 // 执行映射（不处理 Original / Disabled）
-void Execute(const Mapping& m);
+// false 表示输入无效或 SendInput 未完整发送；调用方应暂停映射并提示。
+bool Execute(const Mapping& m);
 
 }  // namespace keymap
 }  // namespace ms

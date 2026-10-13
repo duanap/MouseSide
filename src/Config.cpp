@@ -105,7 +105,7 @@ bool ParseHotkeyText(const std::wstring& text, Hotkey& out) {
         hk.vk = value;
         vkSeen = true;
     }
-    if (!vkSeen) return false;
+    if (!vkSeen || !IsShortcutMainKey(hk.vk)) return false;
     out = hk;
     return true;
 }
@@ -246,14 +246,13 @@ bool Load(AppConfig& cfg) {
 bool Save(const AppConfig& cfg) {
     const std::wstring path = Path();
     const auto write = [&](const wchar_t* key, const std::wstring& value) {
-        WritePrivateProfileStringW(kSection, key, value.c_str(), path.c_str());
+        return WritePrivateProfileStringW(kSection, key, value.c_str(), path.c_str()) != FALSE;
     };
-    write(L"Version", L"1");
-    write(L"Enabled", cfg.enabled ? L"1" : L"0");
-    write(L"AutoStart", cfg.autoStart ? L"1" : L"0");
-    write(L"Button4", SerializeMapping(cfg.button4));
-    write(L"Button5", SerializeMapping(cfg.button5));
-    return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+    return write(L"Version", L"1") &&
+           write(L"Enabled", cfg.enabled ? L"1" : L"0") &&
+           write(L"AutoStart", cfg.autoStart ? L"1" : L"0") &&
+           write(L"Button4", SerializeMapping(cfg.button4)) &&
+           write(L"Button5", SerializeMapping(cfg.button5));
 }
 
 bool GetAutoStart() {

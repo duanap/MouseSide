@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(MouseSide VERSION 1.0.0 LANGUAGES CXX RC)
+project(MouseSide VERSION 1.0.1 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -61,10 +61,10 @@ target_link_libraries(MouseSide PRIVATE
 
 if(MSVC)
     target_compile_options(MouseSide PRIVATE /utf-8 /W4 /permissive- /Zc:__cplusplus)
-    if(CMAKE_BUILD_TYPE STREQUAL "Release")
-        target_compile_options(MouseSide PRIVATE /O2 /Gy /GF)
-        target_link_options(MouseSide PRIVATE /OPT:REF /OPT:ICF)
-    endif()
+    target_compile_options(MouseSide PRIVATE
+        $<$<CONFIG:Release>:/O2> $<$<CONFIG:Release>:/Gy> $<$<CONFIG:Release>:/GF>)
+    target_link_options(MouseSide PRIVATE
+        $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
 else()
     target_compile_options(MouseSide PRIVATE -Wall -Wextra -municode)
     target_link_options(MouseSide PRIVATE -municode)
@@ -84,3 +84,19 @@ set_target_properties(MouseSide PROPERTIES
 
 # 安装：默认把可执行文件放到 install/bin
 install(TARGETS MouseSide RUNTIME DESTINATION bin)
+
+# Regression tests use the real source and isolate desktop/input OS boundaries.
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(MouseSideRegression tests/regression.cpp src/app.rc)
+    target_include_directories(MouseSideRegression PRIVATE src res)
+    target_compile_definitions(MouseSideRegression PRIVATE UNICODE _UNICODE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    target_link_libraries(MouseSideRegression PRIVATE user32 gdi32 shell32 ole32 advapi32 comctl32 shlwapi)
+    if(MSVC)
+        target_compile_options(MouseSideRegression PRIVATE /utf-8 /W4 /permissive-)
+    else()
+        target_compile_options(MouseSideRegression PRIVATE -Wall -Wextra)
+        target_link_options(MouseSideRegression PRIVATE -municode -static -static-libgcc -static-libstdc++)
+    endif()
+    add_test(NAME MouseSideRegression COMMAND MouseSideRegression)
+endif()

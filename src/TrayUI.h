@@ -8,6 +8,9 @@ namespace tray {
 
 // 添加托盘图标。hwnd 接收 WM_MS_TRAY 消息。
 bool Add(HWND hwnd, HINSTANCE hInst);
+// Explorer 重启后重新注册图标，保留暂停状态。
+bool Restore();
+UINT EventMessage(LPARAM value);
 void Remove();
 // 根据映射启用状态切换图标与提示文本
 void Update(bool mappingEnabled);

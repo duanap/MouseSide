@@ -8,6 +8,7 @@
 #include <windowsx.h>
 
 #include <iterator>
+#include <algorithm>
 
 #ifdef __GNUC__
 #pragma GCC diagnostic ignored "-Wcast-function-type"
@@ -24,7 +25,7 @@ enum CtrlId : int {
     kIdStatus,
     kIdGroup4, kIdLabel4Action, kIdCombo4, kIdLabel4Key, kIdEdit4, kIdBtn4Record,
     kIdGroup5, kIdLabel5Action, kIdCombo5, kIdLabel5Key, kIdEdit5, kIdBtn5Record,
-    kIdChkEnable, kIdChkAutoStart, kIdBtnReset, kIdHint,
+    kIdChkEnable, kIdChkAutoStart, kIdBtnReset, kIdHint, kIdBtnExit,
 };
 
 struct LayoutItem {
@@ -58,6 +59,7 @@ constexpr LayoutItem kLayout[] = {
     {kIdChkEnable,    20, 328, 220, 22,  9, false},
     {kIdChkAutoStart, 20, 354, 220, 22,  9, false},
     {kIdBtnReset,     20, 388, 132, 28,  9, false},
+    {kIdBtnExit,     232, 388, 132, 28,  9, false},
     {kIdHint,         20, 424, 344, 36,  8, false},
 };
 
@@ -76,21 +78,15 @@ struct CaptureState {
     HHOOK hook = nullptr;
     Hotkey hotkey{};
     bool active = false;
+    bool down[256]{};
+    bool initiallyDown[256]{};
+    bool swallowed[256]{};
+    bool ending = false;
+    bool success = false;
+    bool finishQueued = false;
     int targetCombo = 0;  // 录制结果写入哪个侧键（kIdCombo4 / kIdCombo5）
 };
 CaptureState g_capture{};
-
-bool IsModifierKey(unsigned vk) {
-    switch (vk) {
-        case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL:
-        case VK_MENU: case VK_LMENU: case VK_RMENU:
-        case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT:
-        case VK_LWIN: case VK_RWIN:
-            return true;
-        default:
-            return false;
-    }
-}
 
 bool KeyDownNow(int vk) {
     return (GetAsyncKeyState(vk) & 0x8000) != 0;
@@ -227,9 +223,46 @@ void RefreshButton(int comboId, int editId, const Mapping& m) {
 
 // ---- 快捷键录制窗口 ----
 void CaptureFinish(bool ok);
+void CaptureUpdateDisplay();
+void CaptureRequestCancel();
+constexpr UINT kCaptureUpdate = WM_APP + 20;
+constexpr UINT kCaptureFinish = WM_APP + 21;
+constexpr UINT kCaptureCancel = WM_APP + 22;
+
+bool CaptureDrained() {
+    return std::none_of(std::begin(g_capture.swallowed), std::end(g_capture.swallowed),
+                        [](bool value) { return value; });
+}
+
+void QueueCaptureFinish() {
+    if (g_capture.ending && !g_capture.finishQueued && CaptureDrained()) {
+        g_capture.finishQueued = true;
+        PostMessageW(g_capture.hwnd, kCaptureFinish, 0, 0);
+    }
+}
+
+Hotkey CaptureModifiers() {
+    const auto* down = g_capture.down;
+    return Hotkey{0,
+        down[VK_CONTROL] || down[VK_LCONTROL] || down[VK_RCONTROL],
+        down[VK_MENU] || down[VK_LMENU] || down[VK_RMENU],
+        down[VK_SHIFT] || down[VK_LSHIFT] || down[VK_RSHIFT],
+        down[VK_LWIN] || down[VK_RWIN]};
+}
 
 LRESULT CALLBACK CaptureProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+        case kCaptureUpdate:
+            CaptureUpdateDisplay();
+            if (!g_capture.ending || g_capture.success) SetTimer(hwnd, 1, 15000, nullptr);
+            return 0;
+        case kCaptureFinish:
+            g_capture.finishQueued = false;
+            if (CaptureDrained()) CaptureFinish(g_capture.success);
+            return 0;
+        case kCaptureCancel:
+            CaptureRequestCancel();
+            return 0;
         case WM_CREATE: {
             HWND tip = CreateWindowW(L"STATIC", L"请按下要使用的快捷键组合…",
                                      WS_CHILD | WS_VISIBLE | SS_CENTER,
@@ -276,7 +309,7 @@ LRESULT CALLBACK CaptureProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_TIMER:
             if (wp == 1) {
                 KillTimer(hwnd, 1);
-                CaptureFinish(false);
+                CaptureRequestCancel();
             }
             return 0;
         case WM_DESTROY: {
@@ -287,7 +320,7 @@ LRESULT CALLBACK CaptureProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_CLOSE:
-            CaptureFinish(false);
+            CaptureRequestCancel();
             return 0;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
@@ -299,10 +332,11 @@ void CaptureUpdateDisplay() {
     if (!display) return;
     if (g_capture.hotkey.IsEmpty()) {
         std::wstring text;
-        if (KeyDownNow(VK_CONTROL)) text += L"Ctrl + ";
-        if (KeyDownNow(VK_MENU)) text += L"Alt + ";
-        if (KeyDownNow(VK_SHIFT)) text += L"Shift + ";
-        if (KeyDownNow(VK_LWIN) || KeyDownNow(VK_RWIN)) text += L"Win + ";
+        const Hotkey mods = CaptureModifiers();
+        if (mods.ctrl) text += L"Ctrl + ";
+        if (mods.alt) text += L"Alt + ";
+        if (mods.shift) text += L"Shift + ";
+        if (mods.win) text += L"Win + ";
         text += L"…";
         SetWindowTextW(display, text.c_str());
     } else {
@@ -312,24 +346,47 @@ void CaptureUpdateDisplay() {
 
 LRESULT CALLBACK CaptureKeyProc(int nCode, WPARAM wp, LPARAM lp) {
     if (nCode == HC_ACTION && g_capture.active) {
+        const auto* info = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lp);
+        if ((info->flags & LLKHF_INJECTED) || info->vkCode > 255)
+            return CallNextHookEx(g_capture.hook, nCode, wp, lp);
         const bool isUp = (wp == WM_KEYUP || wp == WM_SYSKEYUP);
-        if (!isUp) {
-            const auto* info = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lp);
-            const unsigned vk = info->vkCode;
-            if (vk == VK_ESCAPE || vk == VK_BACK) {
-                CaptureFinish(false);
-            } else if (IsModifierKey(vk)) {
-                CaptureUpdateDisplay();
-            } else {
+        const unsigned vk = info->vkCode;
+        if (g_capture.ending && !g_capture.success) {
+            // Cancelled recording only drains keys it already swallowed.
+            // New keyboard input passes through even if a held key never releases.
+            const bool block = g_capture.swallowed[vk];
+            if (isUp && block) {
+                g_capture.swallowed[vk] = false;
+                g_capture.down[vk] = false;
+                QueueCaptureFinish();
+            }
+            return block ? 1 : CallNextHookEx(g_capture.hook, nCode, wp, lp);
+        }
+        const bool passthrough = g_capture.initiallyDown[vk];
+        g_capture.down[vk] = !isUp;
+        if (isUp) {
+            g_capture.initiallyDown[vk] = false;
+            g_capture.swallowed[vk] = false;
+        } else if (!passthrough) {
+            g_capture.swallowed[vk] = true;
+        }
+        if (!isUp && vk == VK_ESCAPE) {
+            g_capture.ending = true;
+            g_capture.success = false;
+            PostMessageW(g_capture.hwnd, kCaptureCancel, 0, 0);
+        } else if (!g_capture.ending && !isUp && !passthrough) {
+            if (!IsModifierKey(vk)) {
+                g_capture.hotkey = CaptureModifiers();
                 g_capture.hotkey.vk = vk;
-                g_capture.hotkey.ctrl = KeyDownNow(VK_CONTROL);
-                g_capture.hotkey.alt = KeyDownNow(VK_MENU);
-                g_capture.hotkey.shift = KeyDownNow(VK_SHIFT);
-                g_capture.hotkey.win = KeyDownNow(VK_LWIN) || KeyDownNow(VK_RWIN);
-                CaptureFinish(true);
+                g_capture.ending = true;
+                g_capture.success = true;
             }
         }
-        return 1;  // 录制期间吞掉全部键盘输入
+        // Do no UI/resource work in this hook. Drain swallowed key releases
+        // before uninstalling it so captured Win/Alt combinations cannot leak.
+        PostMessageW(g_capture.hwnd, kCaptureUpdate, 0, 0);
+        QueueCaptureFinish();
+        if (!passthrough) return 1;
     }
     return CallNextHookEx(g_capture.hook, nCode, wp, lp);
 }
@@ -355,6 +412,23 @@ void CaptureFinish(bool ok) {
     }
 }
 
+void CaptureRequestCancel() {
+    if (!g_capture.active) return;
+    g_capture.ending = true;
+    g_capture.success = false;
+    KillTimer(g_capture.hwnd, 1);
+    if (CaptureDrained()) {
+        CaptureFinish(false);
+        return;
+    }
+    ShowWindow(g_capture.hwnd, SW_HIDE);
+    if (g_capture.owner) {
+        EnableWindow(g_capture.owner, TRUE);
+        SetForegroundWindow(g_capture.owner);
+        RefreshFromConfig();
+    }
+}
+
 void CaptureStart(HWND owner, int targetCombo) {
     if (g_capture.active) return;
 
@@ -363,11 +437,19 @@ void CaptureStart(HWND owner, int targetCombo) {
     g_capture.targetCombo = targetCombo;
     g_capture.hotkey = Hotkey{};
     g_capture.active = true;
+    for (unsigned vk = 1; vk < 256; ++vk) {
+        // Generic modifier aliases are not distinct physical keys. LL events
+        // report the sided key, so avoid a stale second copy in the snapshot.
+        if (vk == VK_CONTROL || vk == VK_MENU || vk == VK_SHIFT) continue;
+        g_capture.down[vk] = KeyDownNow(static_cast<int>(vk));
+        g_capture.initiallyDown[vk] = g_capture.down[vk];
+    }
 
     g_capture.hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME, kCaptureClass, L"录制快捷键",
                                      WS_POPUP | WS_CAPTION | WS_SYSMENU,
                                      CW_USEDEFAULT, CW_USEDEFAULT, 340, 170,
-                                     owner, nullptr, g_hInst, nullptr);
+                                     GetWindow(owner, GW_OWNER) ? GetWindow(owner, GW_OWNER) : owner,
+                                     nullptr, g_hInst, nullptr);
     if (!g_capture.hwnd) {
         g_capture.active = false;
         return;
@@ -429,7 +511,8 @@ void CreateControls() {
     create(L"BUTTON", L"启用侧键映射", kIdChkEnable, BS_AUTOCHECKBOX);
     create(L"BUTTON", L"开机自动启动", kIdChkAutoStart, BS_AUTOCHECKBOX);
     create(L"BUTTON", L"恢复默认配置", kIdBtnReset, BS_PUSHBUTTON);
-    create(L"STATIC", L"关闭窗口后程序会继续在后台运行；需要完全退出请使用托盘图标菜单。",
+    create(L"BUTTON", L"退出程序", kIdBtnExit, BS_PUSHBUTTON);
+    create(L"STATIC", L"关闭窗口后继续后台运行；可通过托盘菜单或“退出程序”按钮完全退出。",
            kIdHint, 0);
 
     FillCombo(combo4);
@@ -542,7 +625,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     const bool want = (SendMessageW(GetDlgItem(hwnd, id), BM_GETCHECK, 0, 0) == BST_CHECKED);
                     if (config::SetAutoStart(want)) {
                         cfg.autoStart = want;
-                        config::Save(cfg);
+                        ApplyConfig();
                     } else {
                         MessageBoxW(hwnd, L"修改开机自动启动失败，可能是注册表权限不足。",
                                     kAppName, MB_ICONWARNING | MB_OK);
@@ -554,6 +637,8 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     config::ResetToDefault(cfg);
                     cfg.autoStart = autoStart;
                     ApplyConfig();
+                } else if (id == kIdBtnExit) {
+                    PostMessageW(GetWindow(hwnd, GW_OWNER), WM_COMMAND, kMenuExit, 0);
                 }
                 return 0;
             }
@@ -579,7 +664,10 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_DESTROY:
-            if (g_capture.active) CaptureFinish(false);
+            if (g_capture.active) {
+                g_capture.owner = nullptr;
+                CaptureRequestCancel();
+            }
             g_hwnd = nullptr;
             if (g_font) { DeleteObject(g_font); g_font = nullptr; }
             if (g_fontBold) { DeleteObject(g_fontBold); g_fontBold = nullptr; }
