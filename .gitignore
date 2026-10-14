@@ -1,0 +1,6 @@
+.cache/
+build*/
+.superpowers/
+.vs/
+CMakeUserPresets.json
+*.user
