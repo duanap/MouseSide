@@ -66,6 +66,16 @@ void Remove() {
     }
 }
 
+void ShowBalloon(const wchar_t* title, const wchar_t* msg) {
+    if (!g_added) return;
+    NOTIFYICONDATAW nid = g_nid;
+    nid.uFlags |= NIF_INFO;
+    nid.dwInfoFlags = NIIF_WARNING;
+    lstrcpynW(nid.szInfoTitle, title, 64);
+    lstrcpynW(nid.szInfo, msg, 256);
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
 void OnCallback(LPARAM lParam) {
     switch (lParam) {
         case WM_LBUTTONDBLCLK:

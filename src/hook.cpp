@@ -10,20 +10,33 @@ HANDLE g_thread = nullptr;
 DWORD g_threadId = 0;
 HANDLE g_ready = nullptr;
 
-// 低级钩子回调必须保持轻量：只做判断和 PostMessage，模拟键盘在主线程执行。
+// 仅钩子线程访问：记录“本次按下”是否被拦截。
+// 按下与松开之间配置可能变化（如暂停映射），松开必须沿用按下时的决定，
+// 否则会出现按下被吞、松开放行（或相反）的不对称。
+bool g_intercepted[2] = {false, false};
+
+// 低级钩子回调必须保持轻量：只读快照、记录状态、PostMessage。
+// 模拟键盘在主线程执行。
 LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION) {
         const MSLLHOOKSTRUCT* info = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
         if (wParam == WM_XBUTTONDOWN || wParam == WM_XBUTTONUP) {
             const UINT xb = HIWORD(info->mouseData);  // XBUTTON1=1 / XBUTTON2=2
-            if ((xb == XBUTTON1 || xb == XBUTTON2) && app::g_cfg.enabled) {
-                const ButtonConfig& bc =
-                    (xb == XBUTTON1) ? app::g_cfg.btn4 : app::g_cfg.btn5;
-                if (bc.type != ActionType::Passthrough) {
-                    MsDbg("hook intercept xb=%u type=%d", xb, static_cast<int>(bc.type));
-                    if (wParam == WM_XBUTTONDOWN)  // 仅按下时执行一次，松开只拦截
-                        PostMessageW(app::g_host, app::WM_APP_EXEC, xb, 0);
-                    return 1;  // 吞掉原始前进/后退
+            if (xb == XBUTTON1 || xb == XBUTTON2) {
+                const int idx = (xb == XBUTTON1) ? 0 : 1;
+                if (wParam == WM_XBUTTONDOWN) {
+                    const app::HookSnapshot snap = app::LoadSnapshot();
+                    g_intercepted[idx] =
+                        snap.enabled && snap.btn[idx].type != ActionType::Passthrough;
+                    if (g_intercepted[idx]) {
+                        // 仅按下时执行一次，松开只拦截
+                        if (PostMessageW(app::g_host, app::WM_APP_EXEC, xb, 0))
+                            return 1;  // 吞掉原始前进/后退
+                        g_intercepted[idx] = false;  // 投递失败 → 放行原始事件
+                    }
+                } else if (g_intercepted[idx]) {
+                    g_intercepted[idx] = false;
+                    return 1;  // 与按下同命运：对应的松开也吞掉
                 }
             }
         }

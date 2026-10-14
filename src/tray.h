@@ -8,5 +8,6 @@ bool Init();         // 添加托盘图标（按当前启用状态选择图标�
 void UpdateIcon();   // 启用/暂停状态切换图标与提示
 void Remove();
 void OnCallback(LPARAM lParam);  // 处理托盘回调鼠标消息
+void ShowBalloon(const wchar_t* title, const wchar_t* msg);  // 重要错误提示
 
 }  // namespace tray

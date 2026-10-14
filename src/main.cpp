@@ -30,8 +30,18 @@ LRESULT CALLBACK HostProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case app::WM_APP_EXEC: {
             const ButtonConfig& bc =
                 (wp == XBUTTON1) ? app::g_cfg.btn4 : app::g_cfg.btn5;
-            MsDbg("exec xb=%u", static_cast<unsigned>(wp));
-            mapper::Execute(bc);
+            if (!mapper::Execute(bc)) {
+                // SendInput 部分失败（如桌面切换瞬间）；已补发松开避免卡键。
+                // 静默重试无意义，向用户提示一次。
+                static bool warned = false;
+                if (!warned) {
+                    warned = true;
+                    tray::ShowBalloon(
+                        L"MouseSide",
+                        L"快捷键发送失败。目标窗口可能需要管理员权限，"
+                        L"或系统正忙；请再试一次。");
+                }
+            }
             return 0;
         }
         case app::WM_APP_SHOWUI:
@@ -50,7 +60,8 @@ LRESULT CALLBACK HostProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_DESTROY:
             hook::Uninstall();
             tray::Remove();
-            SaveConfig(app::g_cfg);
+            if (!SaveConfig(app::g_cfg))
+                MsDbg("save on exit failed");
             if (app::g_ui) DestroyWindow(app::g_ui);
             PostQuitMessage(0);
             return 0;
@@ -64,9 +75,15 @@ namespace app {
 
 void SetEnabled(bool on) {
     app::g_cfg.enabled = on;
-    SaveConfig(app::g_cfg);
+    const bool saved = SaveConfig(app::g_cfg);
+    app::PublishSnapshot();  // 钩子线程读快照，必须先于界面反馈发布
     tray::UpdateIcon();
     ui::Refresh();
+    if (!saved)
+        MessageBoxW(nullptr,
+                    L"配置写入失败（磁盘或权限问题）。\n本次修改仍会生效，"
+                    L"但重启程序后会恢复旧设置。",
+                    L"MouseSide", MB_OK | MB_ICONWARNING);
 }
 
 void ShowSettings() {
@@ -95,8 +112,14 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR lpCmdLine, int) {
     }
 
     const bool firstRun = !LoadConfig(&app::g_cfg);
-    if (firstRun) SaveConfig(app::g_cfg);
+    if (firstRun && !SaveConfig(app::g_cfg)) {
+        MessageBoxW(nullptr,
+                    L"默认配置写入失败（磁盘或权限问题）。\n程序仍可运行，"
+                    L"但设置不会被记住。",
+                    L"MouseSide", MB_OK | MB_ICONWARNING);
+    }
     ApplyAutostart(app::g_cfg.autostart);
+    app::PublishSnapshot();  // 让钩子线程看到启动配置
 
     WNDCLASSW hc = {};
     hc.lpfnWndProc = HostProc;

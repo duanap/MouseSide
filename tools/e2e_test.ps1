@@ -111,4 +111,9 @@ if ($script:r['copy'] -eq 'SIDE-COPY') { Write-Output 'RESULT-COPY: PASS' } else
 if ($script:r['paste'] -eq 'SIDE-COPY') { Write-Output 'RESULT-PASTE: PASS' } else { Write-Output 'RESULT-PASTE: FAIL' }
 
 if ($old) { Set-Clipboard -Value $old }
+$failed = ($script:r['control'] -ne 'CONTROL-OK') -or
+          ($script:r['copy'] -ne 'SIDE-COPY') -or
+          ($script:r['paste'] -ne 'SIDE-COPY') -or
+          ($null -ne $script:r['error'])
 Write-Output 'E2E_DONE'
+if ($failed) { exit 1 } else { exit 0 }

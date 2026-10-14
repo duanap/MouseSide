@@ -78,4 +78,8 @@ if ($script:r['afterDisabled'] -eq 'PROBE-SENTINEL') { Write-Output 'RESULT-DISA
 if ($script:r['paste'] -eq 'PROBE-SENTINEL') { Write-Output 'RESULT-PASTE-STILL-OK: PASS' } else { Write-Output 'RESULT-PASTE-STILL-OK: FAIL' }
 
 if ($old) { Set-Clipboard -Value $old }
+$failed = ($script:r['afterDisabled'] -ne 'PROBE-SENTINEL') -or
+          ($script:r['paste'] -ne 'PROBE-SENTINEL') -or
+          ($null -ne $script:r['error'])
 Write-Output 'E2E_DONE'
+if ($failed) { exit 1 } else { exit 0 }

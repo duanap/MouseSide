@@ -35,20 +35,28 @@ const PresetDef* FindPreset(PresetId id) {
     return &kPresets[0];
 }
 
-// 发送一次完整组合键。策略：
-//  1. 先松开“用户正按住、但组合不需要”的修饰键，发送后恢复，避免误触组合；
+bool Held(UINT vk) { return (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0; }
+
+// 发送一次完整组合键。修饰键保护策略：
+//  1. 用户按住但组合不需要的修饰键先临时松开，发送后恢复（Win 左右键都要处理）；
 //  2. 组合需要、用户未按住的修饰键由我们按下并在结束后释放；
-//  3. 组合需要且用户正按住的修饰键不重复注入，保持用户物理按键状态。
+//  3. 主键总是注入一次按下以触发组合；仅当用户未按住该键时才注入松开，
+//     避免释放用户正在物理按住的键。
 bool SendCombo(const Hotkey& hk) {
     if (!hk.valid()) return false;
-    const UINT modVks[4] = {VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN};
-    const bool want[4] = {hk.ctrl, hk.shift, hk.alt, hk.win};
-    bool held[4];
-    for (int i = 0; i < 4; ++i)
-        held[i] = (GetAsyncKeyState(modVks[i]) & 0x8000) != 0;
+    struct Plain { UINT vk; bool want; bool held; };
+    const Plain mods[3] = {
+        {VK_CONTROL, hk.ctrl, Held(VK_CONTROL)},
+        {VK_SHIFT, hk.shift, Held(VK_SHIFT)},
+        {VK_MENU, hk.alt, Held(VK_MENU)},
+    };
+    const bool lwinHeld = Held(VK_LWIN);
+    const bool rwinHeld = Held(VK_RWIN);
+    const bool winHeld = lwinHeld || rwinHeld;
+    const bool keyHeld = Held(hk.vk);
 
     std::vector<INPUT> seq;
-    seq.reserve(12);
+    seq.reserve(14);
     auto key = [&seq](UINT vk, bool up) {
         INPUT in{};
         in.type = INPUT_KEYBOARD;
@@ -58,20 +66,63 @@ bool SendCombo(const Hotkey& hk) {
         seq.push_back(in);
     };
 
-    for (int i = 0; i < 4; ++i)
-        if (held[i] && !want[i]) key(modVks[i], true);
-    for (int i = 0; i < 4; ++i)
-        if (want[i] && !held[i]) key(modVks[i], false);
+    // 1) 释放用户按住但组合不需要的修饰键
+    for (const Plain& m : mods)
+        if (m.held && !m.want) key(m.vk, true);
+    if (winHeld && !hk.win) {
+        if (lwinHeld) key(VK_LWIN, true);
+        if (rwinHeld) key(VK_RWIN, true);
+    }
+    // 2) 注入组合需要但用户未按住的修饰键
+    for (const Plain& m : mods)
+        if (m.want && !m.held) key(m.vk, false);
+    if (hk.win && !winHeld) key(VK_LWIN, false);
+    // 3) 主键
     key(hk.vk, false);
-    key(hk.vk, true);
-    for (int i = 3; i >= 0; --i)
-        if (want[i] && !held[i]) key(modVks[i], true);
-    for (int i = 3; i >= 0; --i)
-        if (held[i] && !want[i]) key(modVks[i], false);
+    if (!keyHeld) key(hk.vk, true);
+    // 4) 释放我们注入的修饰键
+    if (hk.win && !winHeld) key(VK_LWIN, true);
+    for (int i = 2; i >= 0; --i)
+        if (mods[i].want && !mods[i].held) key(mods[i].vk, true);
+    // 5) 恢复我们临时释放的冲突修饰键
+    if (winHeld && !hk.win) {
+        if (rwinHeld) key(VK_RWIN, false);
+        if (lwinHeld) key(VK_LWIN, false);
+    }
+    for (int i = 2; i >= 0; --i)
+        if (mods[i].held && !mods[i].want) key(mods[i].vk, false);
 
-    UINT sent = SendInput(static_cast<UINT>(seq.size()), seq.data(), sizeof(INPUT));
-    MsDbg("sendcombo size=%zu sent=%u", seq.size(), sent);
-    return sent == seq.size();
+    const UINT n = static_cast<UINT>(seq.size());
+    const UINT sent = SendInput(n, seq.data(), sizeof(INPUT));
+    if (sent == n) return true;
+
+    // SendInput 未全部插入（如桌面切换瞬间）：为已注入的按下补发松开，
+    // 避免留下“卡键”，并向上报告失败。
+    MsDbg("sendcombo partial: %u/%u", sent, n);
+    int state[256] = {};
+    for (UINT i = 0; i < sent; ++i) {
+        if (seq[i].type != INPUT_KEYBOARD) continue;
+        const UINT vk = seq[i].ki.wVk;
+        if (!(seq[i].ki.dwFlags & KEYEVENTF_KEYUP)) {
+            ++state[vk];
+        } else if (state[vk] > 0) {
+            --state[vk];
+        }
+    }
+    std::vector<INPUT> fix;
+    for (UINT vk = 0; vk < 256; ++vk) {
+        if (state[vk] > 0) {
+            INPUT up{};
+            up.type = INPUT_KEYBOARD;
+            up.ki.wVk = static_cast<WORD>(vk);
+            up.ki.dwFlags = KEYEVENTF_KEYUP;
+            if (KeyNeedsExtended(vk)) up.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+            fix.push_back(up);
+        }
+    }
+    if (!fix.empty())
+        SendInput(static_cast<UINT>(fix.size()), fix.data(), sizeof(INPUT));
+    return false;
 }
 
 }  // namespace

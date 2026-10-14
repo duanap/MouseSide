@@ -173,18 +173,23 @@ LRESULT CALLBACK UIProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 case IDC_CHK_AUTO:
                     app::g_cfg.autostart =
                         SendMessageW(g_chkAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
-                    ApplyAutostart(app::g_cfg.autostart);
-                    SaveConfig(app::g_cfg);
+                    if (!ApplyAutostart(app::g_cfg.autostart) || !SaveConfig(app::g_cfg))
+                        MessageBoxW(h, L"设置保存失败（磁盘或权限问题）。\n本次修改仍会生效，但重启后不会保留。",
+                                    L"MouseSide", MB_OK | MB_ICONWARNING);
                     return 0;
                 case IDC_BTN_RESET:
                     if (MessageBoxW(h, L"恢复默认配置？两个侧键将重新映射为粘贴 / 复制。",
                                     L"MouseSide", MB_YESNO | MB_ICONQUESTION) == IDYES) {
                         ResetConfig(&app::g_cfg);
                         ApplyAutostart(app::g_cfg.autostart);
-                        SaveConfig(app::g_cfg);
+                        const bool saved = SaveConfig(app::g_cfg);
+                        app::PublishSnapshot();
                         tray::UpdateIcon();
                         SyncChecks(h);
                         InvalidateRect(h, nullptr, TRUE);
+                        if (!saved)
+                            MessageBoxW(h, L"配置写入失败（磁盘或权限问题）。\n本次修改仍会生效，但重启程序后会恢复旧设置。",
+                                        L"MouseSide", MB_OK | MB_ICONWARNING);
                     }
                     return 0;
             }
@@ -244,6 +249,13 @@ LRESULT CALLBACK RecProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 g_md.recording = true;
                 g_md.recBackup = g_md.hotkey;
                 g_md.hotkey = Hotkey{};
+                // 捕获点击前已按住的修饰键：先按住 Ctrl 再点录制框、再按 S
+                // 应录成 Ctrl+S 而不是 S
+                g_md.hotkey.ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+                g_md.hotkey.shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+                g_md.hotkey.alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+                g_md.hotkey.win = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
+                                  (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
                 ShowRec();
             }
             return 0;
@@ -415,14 +427,14 @@ bool RunMappingDialog(HWND parent, bool isBtn4) {
 
     HWND rdoPreset = Mk(g_md.h, L"button", BS_AUTORADIOBUTTON | WS_GROUP, 20, 16, 220, 20, ID_RDO_PRESET, L"预设功能");
     g_md.cmb = Mk(g_md.h, L"combobox", CBS_DROPDOWNLIST, 40, 42, 300, 160, ID_CMB_PRESET, L"");
-    HWND rdoKeys = Mk(g_md.h, L"button", BS_AUTORADIOBUTTON | WS_GROUP, 20, 76, 220, 20, ID_RDO_KEYS, L"自定义快捷键");
+    HWND rdoKeys = Mk(g_md.h, L"button", BS_AUTORADIOBUTTON, 20, 76, 220, 20, ID_RDO_KEYS, L"自定义快捷键");
     g_md.rec = Mk(g_md.h, L"edit", ES_READONLY, 40, 102, 250, 26, ID_REC, kRecHint, WS_EX_CLIENTEDGE);
     g_md.recOrig = reinterpret_cast<WNDPROC>(
         SetWindowLongPtrW(g_md.rec, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(RecProc)));
     g_md.btnClear = Mk(g_md.h, L"button", BS_PUSHBUTTON, 298, 102, 70, 26, ID_BTN_CLEAR, L"清除");
     Mk(g_md.h, L"static", 0, 40, 136, 320, 32, ID_HINT, L"点击输入框后按下组合键，Esc 取消录制。");
-    HWND rdoPass = Mk(g_md.h, L"button", BS_AUTORADIOBUTTON | WS_GROUP, 20, 172, 340, 20, ID_RDO_PASS, L"保留鼠标原始功能（前进 / 后退）");
-    HWND rdoDis = Mk(g_md.h, L"button", BS_AUTORADIOBUTTON | WS_GROUP, 20, 200, 340, 20, ID_RDO_DIS, L"禁用此侧键");
+    HWND rdoPass = Mk(g_md.h, L"button", BS_AUTORADIOBUTTON, 20, 172, 340, 20, ID_RDO_PASS, L"保留鼠标原始功能（前进 / 后退）");
+    HWND rdoDis = Mk(g_md.h, L"button", BS_AUTORADIOBUTTON, 20, 200, 340, 20, ID_RDO_DIS, L"禁用此侧键");
     Mk(g_md.h, L"button", BS_DEFPUSHBUTTON, 192, 244, 88, 28, IDOK, L"确定");
     Mk(g_md.h, L"button", BS_PUSHBUTTON, 288, 244, 88, 28, IDCANCEL, L"取消");
 
@@ -466,8 +478,14 @@ bool RunMappingDialog(HWND parent, bool isBtn4) {
 
 void EditMapping(HWND parent, bool isBtn4) {
     if (RunMappingDialog(parent, isBtn4)) {
-        SaveConfig(app::g_cfg);
+        const bool saved = SaveConfig(app::g_cfg);
+        app::PublishSnapshot();  // 钩子线程读快照，必须先于界面反馈发布
         ui::Refresh();
+        if (!saved)
+            MessageBoxW(parent,
+                        L"配置写入失败（磁盘或权限问题）。\n本次修改仍会生效，"
+                        L"但重启程序后会恢复旧设置。",
+                        L"MouseSide", MB_OK | MB_ICONWARNING);
     }
 }
 

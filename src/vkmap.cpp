@@ -11,7 +11,8 @@ struct VkEntry {
     const wchar_t* name;
 };
 
-// 字母、数字、F1-F24 由代码生成；这里只放具名按键
+// 字母、数字、F1-F24 由代码生成；这里只放具名按键。
+// 注意：名称不能包含 '+'（序列化以 '+' 为分隔符）。
 const VkEntry kNamedVks[] = {
     {VK_ESCAPE, L"Esc"},       {VK_TAB, L"Tab"},        {VK_SPACE, L"Space"},
     {VK_RETURN, L"Enter"},     {VK_BACK, L"Backspace"},
@@ -21,11 +22,16 @@ const VkEntry kNamedVks[] = {
     {VK_DOWN, L"Down"},
     {VK_INSERT, L"Ins"},       {VK_DELETE, L"Del"},     {VK_SNAPSHOT, L"PrtSc"},
     {VK_SCROLL, L"ScrollLock"},{VK_PAUSE, L"Pause"},    {VK_APPS, L"Menu"},
+    // 主键盘标点（US 布局），保证录制这些键后能保存/读回
+    {VK_OEM_1, L";"},          {VK_OEM_PLUS, L"="},     {VK_OEM_COMMA, L","},
+    {VK_OEM_MINUS, L"-"},      {VK_OEM_PERIOD, L"."},   {VK_OEM_2, L"/"},
+    {VK_OEM_3, L"`"},          {VK_OEM_4, L"["},        {VK_OEM_5, L"\\"},
+    {VK_OEM_6, L"]"},          {VK_OEM_7, L"'"},
     {VK_NUMPAD0, L"Num0"},     {VK_NUMPAD1, L"Num1"},   {VK_NUMPAD2, L"Num2"},
     {VK_NUMPAD3, L"Num3"},     {VK_NUMPAD4, L"Num4"},   {VK_NUMPAD5, L"Num5"},
     {VK_NUMPAD6, L"Num6"},     {VK_NUMPAD7, L"Num7"},   {VK_NUMPAD8, L"Num8"},
     {VK_NUMPAD9, L"Num9"},
-    {VK_ADD, L"Num+"},         {VK_SUBTRACT, L"Num-"},  {VK_MULTIPLY, L"Num*"},
+    {VK_ADD, L"NumAdd"},       {VK_SUBTRACT, L"Num-"},  {VK_MULTIPLY, L"Num*"},
     {VK_DIVIDE, L"Num/"},      {VK_DECIMAL, L"Num."},   {VK_NUMLOCK, L"NumLock"},
     {VK_BROWSER_BACK, L"BrowserBack"},       {VK_BROWSER_FORWARD, L"BrowserForward"},
     {VK_BROWSER_REFRESH, L"BrowserRefresh"}, {VK_BROWSER_STOP, L"BrowserStop"},
@@ -47,16 +53,16 @@ std::wstring Lower(const std::wstring& s) {
 
 bool VkFromName(const std::wstring& name, UINT* out) {
     if (name.empty()) return false;
-    // 单字符：字母 A-Z、数字 0-9
-    if (name.size() == 1) {
-        wchar_t c = towupper(name[0]);
+    const std::wstring low = Lower(name);
+    // 单字符：字母 A-Z、数字 0-9；其他单字符（标点）落入名称表匹配
+    if (low.size() == 1) {
+        const wchar_t c = towupper(low[0]);
         if ((c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9')) {
             *out = static_cast<UINT>(c);
             return true;
         }
     }
     // F1 - F24
-    const std::wstring low = Lower(name);
     if (low.size() >= 2 && low[0] == L'f') {
         bool digits = true;
         for (size_t i = 1; i < low.size(); ++i)
@@ -73,6 +79,19 @@ bool VkFromName(const std::wstring& name, UINT* out) {
         if (low == Lower(e.name)) {
             *out = e.vk;
             return true;
+        }
+    }
+    // “VK 0xNN” 兜底：与 VkToName 对未收录键的显示格式互逆，
+    // 保证任意可录制的按键都能完成保存/读回往返。
+    if (low.rfind(L"vk 0x", 0) == 0) {
+        const std::wstring hex = low.substr(5);
+        if (!hex.empty() && hex.size() <= 2) {
+            wchar_t* end = nullptr;
+            const unsigned long v = wcstoul(hex.c_str(), &end, 16);
+            if (end && *end == L'\0' && v >= 1 && v <= 255) {
+                *out = static_cast<UINT>(v);
+                return true;
+            }
         }
     }
     return false;

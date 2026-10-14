@@ -70,7 +70,7 @@ void LoadButton(const wchar_t* section, ButtonConfig* b, PresetId defPreset,
     }
 }
 
-void SaveButton(const wchar_t* section, const ButtonConfig& b,
+bool SaveButton(const wchar_t* section, const ButtonConfig& b,
                 const std::wstring& path) {
     const wchar_t* type = L"Preset";
     std::wstring value;
@@ -80,8 +80,9 @@ void SaveButton(const wchar_t* section, const ButtonConfig& b,
         case ActionType::Passthrough: type = L"Passthrough"; break;
         case ActionType::Disabled: type = L"Disabled"; break;
     }
-    WritePrivateProfileStringW(section, L"Type", type, path.c_str());
-    WritePrivateProfileStringW(section, L"Value", value.c_str(), path.c_str());
+    const BOOL a = WritePrivateProfileStringW(section, L"Type", type, path.c_str());
+    const BOOL c = WritePrivateProfileStringW(section, L"Value", value.c_str(), path.c_str());
+    return a && c;
 }
 
 }  // namespace
@@ -121,28 +122,34 @@ bool LoadConfig(Config* c) {
     return true;
 }
 
-void SaveConfig(const Config& c) {
+bool SaveConfig(const Config& c) {
     CreateDirectoryW(ConfigDirPath().c_str(), nullptr);
     const std::wstring path = ConfigFilePath();
-    WritePrivateProfileStringW(L"General", L"Enabled", c.enabled ? L"1" : L"0", path.c_str());
-    WritePrivateProfileStringW(L"General", L"AutoStart", c.autostart ? L"1" : L"0", path.c_str());
-    SaveButton(L"Button4", c.btn4, path);
-    SaveButton(L"Button5", c.btn5, path);
+    bool ok = true;
+    ok = WritePrivateProfileStringW(L"General", L"Enabled", c.enabled ? L"1" : L"0", path.c_str()) && ok;
+    ok = WritePrivateProfileStringW(L"General", L"AutoStart", c.autostart ? L"1" : L"0", path.c_str()) && ok;
+    ok = SaveButton(L"Button4", c.btn4, path) && ok;
+    ok = SaveButton(L"Button5", c.btn5, path) && ok;
+    return ok;
 }
 
-void ApplyAutostart(bool on) {
+bool ApplyAutostart(bool on) {
     HKEY h = nullptr;
     if (RegOpenKeyExW(HKEY_CURRENT_USER,
                       L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
                       0, KEY_SET_VALUE | KEY_QUERY_VALUE, &h) != ERROR_SUCCESS)
-        return;
+        return false;
+    bool ok;
     if (on) {
         const std::wstring cmd = L"\"" + ExePath() + L"\" /tray";
-        RegSetValueExW(h, L"MouseSide", 0, REG_SZ,
-                       reinterpret_cast<const BYTE*>(cmd.c_str()),
-                       static_cast<DWORD>((cmd.size() + 1) * sizeof(wchar_t)));
+        ok = RegSetValueExW(h, L"MouseSide", 0, REG_SZ,
+                            reinterpret_cast<const BYTE*>(cmd.c_str()),
+                            static_cast<DWORD>((cmd.size() + 1) * sizeof(wchar_t)))
+             == ERROR_SUCCESS;
     } else {
-        RegDeleteValueW(h, L"MouseSide");  // 不存在也视为成功
+        const LSTATUS r = RegDeleteValueW(h, L"MouseSide");
+        ok = (r == ERROR_SUCCESS || r == ERROR_FILE_NOT_FOUND);  // 不存在视为已关闭
     }
     RegCloseKey(h);
+    return ok;
 }

@@ -36,3 +36,14 @@ else()
   target_link_options(MouseSide PRIVATE
     -municode -static -static-libgcc -static-libstdc++ -s)
 endif()
+
+# 回归测试：快捷键名称序列化往返
+enable_testing()
+add_executable(vkmap_test tests/vkmap_test.cpp src/vkmap.cpp)
+target_compile_definitions(vkmap_test PRIVATE UNICODE _UNICODE NOMINMAX)
+if (MSVC)
+  target_compile_options(vkmap_test PRIVATE /W4 /utf-8)
+else()
+  target_compile_options(vkmap_test PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME vkmap COMMAND vkmap_test)

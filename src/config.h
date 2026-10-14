@@ -35,7 +35,7 @@ std::wstring ConfigFilePath();        // %LOCALAPPDATA%\MouseSide\config.ini
 
 // 返回 false 表示首次运行（文件不存在），c 保持默认值；损坏字段回退默认值。
 bool LoadConfig(Config* c);
-void SaveConfig(const Config& c);
+bool SaveConfig(const Config& c);  // false = INI 写入失败（磁盘/权限）
 
 // 开机自启：HKCU\...\Run 写/删 "MouseSide"（带 /tray 参数，启动后仅驻留托盘）
-void ApplyAutostart(bool on);
+bool ApplyAutostart(bool on);      // false = 注册表操作失败
