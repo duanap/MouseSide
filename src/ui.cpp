@@ -173,22 +173,31 @@ LRESULT CALLBACK UIProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 case IDC_CHK_AUTO:
                     app::g_cfg.autostart =
                         SendMessageW(g_chkAuto, BM_GETCHECK, 0, 0) == BST_CHECKED;
-                    if (!ApplyAutostart(app::g_cfg.autostart) || !SaveConfig(app::g_cfg))
-                        MessageBoxW(h, L"设置保存失败（磁盘或权限问题）。\n本次修改仍会生效，但重启后不会保留。",
-                                    L"MouseSide", MB_OK | MB_ICONWARNING);
+                    {
+                        // 两项独立执行，不用 || 短路：注册表失败也要保存 INI
+                        const bool regOk = ApplyAutostart(app::g_cfg.autostart);
+                        const bool iniOk = SaveConfig(app::g_cfg);
+                        if (!regOk || !iniOk)
+                            MessageBoxW(h,
+                                        !regOk ? L"开机自启注册表写入失败，自启状态可能没有改变。"
+                                               : L"配置文件写入失败（磁盘或权限问题），重启后不会保留。",
+                                        L"MouseSide", MB_OK | MB_ICONWARNING);
+                    }
                     return 0;
                 case IDC_BTN_RESET:
                     if (MessageBoxW(h, L"恢复默认配置？两个侧键将重新映射为粘贴 / 复制。",
                                     L"MouseSide", MB_YESNO | MB_ICONQUESTION) == IDYES) {
                         ResetConfig(&app::g_cfg);
-                        ApplyAutostart(app::g_cfg.autostart);
-                        const bool saved = SaveConfig(app::g_cfg);
+                        const bool regOk = ApplyAutostart(app::g_cfg.autostart);
+                        const bool iniOk = SaveConfig(app::g_cfg);
                         app::PublishSnapshot();
                         tray::UpdateIcon();
                         SyncChecks(h);
                         InvalidateRect(h, nullptr, TRUE);
-                        if (!saved)
-                            MessageBoxW(h, L"配置写入失败（磁盘或权限问题）。\n本次修改仍会生效，但重启程序后会恢复旧设置。",
+                        if (!regOk || !iniOk)
+                            MessageBoxW(h,
+                                        !regOk ? L"开机自启注册表写入失败，自启状态可能没有改变。"
+                                               : L"配置写入失败（磁盘或权限问题）。本次修改仍会生效，但重启程序后会恢复旧设置。",
                                         L"MouseSide", MB_OK | MB_ICONWARNING);
                     }
                     return 0;

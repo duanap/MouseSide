@@ -26,9 +26,12 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
                 const int idx = (xb == XBUTTON1) ? 0 : 1;
                 if (wParam == WM_XBUTTONDOWN) {
                     const app::HookSnapshot snap = app::LoadSnapshot();
+                    const ButtonConfig& bc = snap.btn[idx];
                     g_intercepted[idx] =
-                        snap.enabled && snap.btn[idx].type != ActionType::Passthrough;
+                        snap.enabled && bc.type != ActionType::Passthrough;
                     if (g_intercepted[idx]) {
+                        if (bc.type == ActionType::Disabled)
+                            return 1;  // 禁用：吞掉即可，不需要执行
                         // 仅按下时执行一次，松开只拦截
                         if (PostMessageW(app::g_host, app::WM_APP_EXEC, xb, 0))
                             return 1;  // 吞掉原始前进/后退

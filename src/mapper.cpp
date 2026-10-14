@@ -55,9 +55,26 @@ bool SendCombo(const Hotkey& hk) {
     const bool winHeld = lwinHeld || rwinHeld;
     const bool keyHeld = Held(hk.vk);
 
+    // 记录每个会被注入事件触碰的键的“发送前状态”。部分发送失败时据此把
+    // 每个键恢复到原状（含用户原本按住、被我们临时释放的键），而不是仅按
+    // 注入前缀补松开——否则会破坏用户的物理按键状态。
+    UINT touched[8];
+    bool preDown[8];
+    int nTouched = 0;
+    auto touch = [&](UINT vk) {
+        for (int i = 0; i < nTouched; ++i)
+            if (touched[i] == vk) return;
+        if (nTouched < 8) {
+            touched[nTouched] = vk;
+            preDown[nTouched] = Held(vk);
+            ++nTouched;
+        }
+    };
+
     std::vector<INPUT> seq;
     seq.reserve(14);
-    auto key = [&seq](UINT vk, bool up) {
+    auto key = [&](UINT vk, bool up) {
+        touch(vk);
         INPUT in{};
         in.type = INPUT_KEYBOARD;
         in.ki.wVk = static_cast<WORD>(vk);
@@ -96,29 +113,27 @@ bool SendCombo(const Hotkey& hk) {
     const UINT sent = SendInput(n, seq.data(), sizeof(INPUT));
     if (sent == n) return true;
 
-    // SendInput 未全部插入（如桌面切换瞬间）：为已注入的按下补发松开，
-    // 避免留下“卡键”，并向上报告失败。
+    // SendInput 未全部插入（如桌面切换瞬间）：把每个被触碰的键恢复到
+    // 发送前状态——沿注入前缀推演当前状态，与发送前状态比较后补齐差量，
+    // 既不留卡键，也不会误松开用户按住的键。向上报告失败。
     MsDbg("sendcombo partial: %u/%u", sent, n);
-    int state[256] = {};
-    for (UINT i = 0; i < sent; ++i) {
-        if (seq[i].type != INPUT_KEYBOARD) continue;
+    bool cur[8];
+    for (int t = 0; t < nTouched; ++t) cur[t] = preDown[t];
+    for (UINT i = 0; i < sent && i < n; ++i) {
         const UINT vk = seq[i].ki.wVk;
-        if (!(seq[i].ki.dwFlags & KEYEVENTF_KEYUP)) {
-            ++state[vk];
-        } else if (state[vk] > 0) {
-            --state[vk];
-        }
+        const bool up = (seq[i].ki.dwFlags & KEYEVENTF_KEYUP) != 0;
+        for (int t = 0; t < nTouched; ++t)
+            if (touched[t] == vk) { cur[t] = !up; break; }
     }
     std::vector<INPUT> fix;
-    for (UINT vk = 0; vk < 256; ++vk) {
-        if (state[vk] > 0) {
-            INPUT up{};
-            up.type = INPUT_KEYBOARD;
-            up.ki.wVk = static_cast<WORD>(vk);
-            up.ki.dwFlags = KEYEVENTF_KEYUP;
-            if (KeyNeedsExtended(vk)) up.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
-            fix.push_back(up);
-        }
+    for (int t = 0; t < nTouched; ++t) {
+        if (cur[t] == preDown[t]) continue;
+        INPUT in{};
+        in.type = INPUT_KEYBOARD;
+        in.ki.wVk = static_cast<WORD>(touched[t]);
+        in.ki.dwFlags = preDown[t] ? 0 : KEYEVENTF_KEYUP;
+        if (KeyNeedsExtended(touched[t])) in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+        fix.push_back(in);
     }
     if (!fix.empty())
         SendInput(static_cast<UINT>(fix.size()), fix.data(), sizeof(INPUT));
@@ -137,7 +152,9 @@ bool Execute(const ButtonConfig& bc) {
             return SendCombo(bc.hotkey);
         case ActionType::Passthrough:
         case ActionType::Disabled:
-            return false;  // 不拦截，钩子层已放行/吞掉
+            // 无操作（钩子层已放行/吞掉），视为成功，
+            // 避免误触发“发送失败”的用户提示。
+            return true;
     }
     return false;
 }

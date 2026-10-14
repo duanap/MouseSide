@@ -118,7 +118,12 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR lpCmdLine, int) {
                     L"但设置不会被记住。",
                     L"MouseSide", MB_OK | MB_ICONWARNING);
     }
-    ApplyAutostart(app::g_cfg.autostart);
+    if (!ApplyAutostart(app::g_cfg.autostart)) {
+        // 启动时同步注册表自启状态失败：不致命，但要让用户知道开关可能不一致
+        MessageBoxW(nullptr,
+                    L"开机自启状态同步失败（注册表访问被拒）。\n设置窗口中的自启开关可能与实际状态不一致。",
+                    L"MouseSide", MB_OK | MB_ICONWARNING);
+    }
     app::PublishSnapshot();  // 让钩子线程看到启动配置
 
     WNDCLASSW hc = {};
