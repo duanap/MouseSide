@@ -157,6 +157,9 @@ bool KeyNeedsExtended(UINT vk) {
         case VK_PRIOR: case VK_NEXT: case VK_END: case VK_HOME:
         case VK_LEFT: case VK_UP: case VK_RIGHT: case VK_DOWN:
         case VK_INSERT: case VK_DELETE: case VK_SNAPSHOT: case VK_DIVIDE:
+        // 右 Ctrl/右 Alt/右 Win 的扫描码带扩展位；不带标志会被当成左侧键。
+        // 注意右 Shift（0x36）没有扩展位，不能加。
+        case VK_RCONTROL: case VK_RMENU: case VK_RWIN:
             return true;
         default:
             return false;
