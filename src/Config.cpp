@@ -22,9 +22,10 @@ std::filesystem::path ConfigStore::defaultPath() {
 Config ConfigStore::load(bool& repaired) const {
     Config config;
     repaired = false;
-    std::error_code ec;
-    const auto size = std::filesystem::file_size(path_, ec);
-    if (ec || size == 0 || size > 65536) { repaired = true; return config; }
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (!GetFileAttributesExW(path_.c_str(),GetFileExInfoStandard,&attributes) || attributes.nFileSizeHigh ||
+        attributes.nFileSizeLow == 0 || attributes.nFileSizeLow > 65536 || (attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+        { repaired = true; return config; }
     auto read = [&](const wchar_t* key) {
         wchar_t value[128]{};
         const DWORD length = GetPrivateProfileStringW(L"MouseSide", key, L"", value, 128, path_.c_str());
@@ -48,9 +49,9 @@ Config ConfigStore::load(bool& repaired) const {
 bool ConfigStore::save(const Config& config, std::wstring& error) const {
     for (const Action& action : config.buttons)
         if (action.kind == ActionKind::Shortcut && !validShortcut(action.shortcut)) { error = L"快捷键配置无效。"; return false; }
-    std::error_code ec;
-    std::filesystem::create_directories(path_.parent_path(), ec);
-    if (ec) { error = L"无法创建配置目录。"; return false; }
+    const int directoryResult=SHCreateDirectoryExW(nullptr,path_.parent_path().c_str(),nullptr);
+    if(directoryResult!=ERROR_SUCCESS && directoryResult!=ERROR_ALREADY_EXISTS && directoryResult!=ERROR_FILE_EXISTS)
+        { error=L"无法创建配置目录："+systemError(static_cast<DWORD>(directoryResult)); return false; }
     const auto temp = std::filesystem::path(path_.wstring() + L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp");
     const std::wstring text = L"\xFEFF[MouseSide]\r\nButton4=" + encodeAction(config.buttons[0]) +
         L"\r\nButton5=" + encodeAction(config.buttons[1]) + L"\r\nEnabled=" + (config.enabled ? L"1" : L"0") +

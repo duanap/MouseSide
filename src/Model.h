@@ -43,4 +43,17 @@ private:
     bool down_ = false;
     bool swallowed_ = false;
 };
+enum class RecordingDecision { Pass, Swallow };
+class RecordingState {
+public:
+    RecordingDecision process(unsigned key,bool down);
+    void cancel() { finishing_=true; shortcut_.reset(); }
+    bool complete() const;
+    bool invalid() const { return invalid_; }
+    std::optional<Shortcut> shortcut() const { return shortcut_; }
+private:
+    std::array<bool,256> held_{};
+    bool finishing_=false, invalid_=false;
+    std::optional<Shortcut> shortcut_;
+};
 }

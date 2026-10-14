@@ -1,0 +1,62 @@
+#include "Test.h"
+#include "Config.h"
+#include <windows.h>
+#include <string>
+#include <filesystem>
+#include <fstream>
+struct ConfigBackup {
+    std::filesystem::path path=ms::ConfigStore::defaultPath();
+    bool existed=std::filesystem::exists(path);
+    std::string bytes;
+    ConfigBackup() { if(existed) { std::ifstream file(path,std::ios::binary); bytes.assign(std::istreambuf_iterator<char>(file),{}); } }
+    ~ConfigBackup() { if(existed) { std::ofstream file(path,std::ios::binary|std::ios::trunc); file.write(bytes.data(),static_cast<std::streamsize>(bytes.size())); } else { std::error_code ec; std::filesystem::remove(path,ec); } }
+};
+static PROCESS_INFORMATION launch(const std::wstring& exe,const wchar_t* args) {
+    STARTUPINFOW startup{}; startup.cb=sizeof(startup);
+    PROCESS_INFORMATION process{};
+    std::wstring command=L"\""+exe+L"\" "+args;
+    CHECK(CreateProcessW(exe.c_str(),command.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&startup,&process));
+    CloseHandle(process.hThread);
+    return process;
+}
+int wmain(int argc,wchar_t** argv) {
+    HANDLE first=nullptr;
+    try {
+        CHECK(argc==2);
+        CHECK(!FindWindowW(L"MouseSide.Codex.Settings",nullptr));
+        ConfigBackup configBackup;
+        auto process=launch(argv[1],L"--background"); first=process.hProcess;
+        HWND window=nullptr;
+        for (int i=0;i<100 && !window;++i) { Sleep(50); window=FindWindowW(L"MouseSide.Codex.Settings",nullptr); }
+        CHECK(window);
+        CHECK(!IsWindowVisible(window));
+        auto second=launch(argv[1],L"");
+        CHECK(WaitForSingleObject(second.hProcess,5000)==WAIT_OBJECT_0);
+        DWORD code=1; GetExitCodeProcess(second.hProcess,&code); CloseHandle(second.hProcess);
+        CHECK(code==0);
+        for (int i=0;i<40 && !IsWindowVisible(window);++i) Sleep(50);
+        CHECK(IsWindowVisible(window));
+        auto combo=GetDlgItem(window,100);
+        CHECK(combo);
+        SendMessageW(combo,CB_SETCURSEL,2,0); // cut
+        SendMessageW(window,WM_COMMAND,MAKEWPARAM(100,CBN_SELCHANGE),reinterpret_cast<LPARAM>(combo));
+        ms::ConfigStore store(ms::ConfigStore::defaultPath());
+        bool repaired=false;
+        CHECK(store.load(repaired).buttons[0].shortcut == ms::Shortcut{'X',ms::Ctrl});
+        CHECK(!repaired);
+        SendMessageW(combo,CB_SETCURSEL,1,0); // restore default for visual checks
+        SendMessageW(window,WM_COMMAND,MAKEWPARAM(100,CBN_SELCHANGE),reinterpret_cast<LPARAM>(combo));
+        SendMessageW(window,WM_CLOSE,0,0);
+        CHECK(!IsWindowVisible(window));
+        CHECK(WaitForSingleObject(first,0)==WAIT_TIMEOUT);
+        PostMessageW(window,WM_COMMAND,9003,0); // tray Exit command
+        CHECK(WaitForSingleObject(first,5000)==WAIT_OBJECT_0);
+        CloseHandle(first); first=nullptr;
+        CHECK(!FindWindowW(L"MouseSide.Codex.Settings",nullptr));
+        std::cout << "PASS: background start, single-instance wake, immediate preset persistence, close-to-tray, clean exit\n";
+        return 0;
+    } catch(const std::exception& e) {
+        if(first) { auto window=FindWindowW(L"MouseSide.Codex.Settings",nullptr); if(window) PostMessageW(window,WM_COMMAND,9003,0); WaitForSingleObject(first,5000); CloseHandle(first); }
+        std::cerr << "FAIL: " << e.what() << '\n'; return 1;
+    }
+}

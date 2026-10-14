@@ -1,5 +1,6 @@
 #include "Model.h"
 #include <limits>
+#include <algorithm>
 namespace ms {
 unsigned modifierFor(unsigned key) {
     switch(key) {
@@ -90,5 +91,24 @@ ButtonDecision ButtonState::onUp() {
     down_ = false;
     swallowed_ = false;
     return swallow ? ButtonDecision::Swallow : ButtonDecision::Pass;
+}
+RecordingDecision RecordingState::process(unsigned key,bool down) {
+    if(key>=256) return RecordingDecision::Pass;
+    const bool wasHeld=held_[key];
+    if((down && finishing_ && !wasHeld) || (!down && !wasHeld)) return RecordingDecision::Pass;
+    held_[key]=down;
+    if(down && !wasHeld && !isModifier(key) && !finishing_) {
+        finishing_=true;
+        unsigned modifiers=0;
+        for(unsigned k=0;k<256;++k) if(held_[k]) modifiers |= modifierFor(k);
+        if(key!=VK_ESCAPE) {
+            if(validShortcut({key,modifiers})) shortcut_=Shortcut{key,modifiers};
+            else invalid_=true;
+        }
+    }
+    return RecordingDecision::Swallow;
+}
+bool RecordingState::complete() const {
+    return finishing_ && std::none_of(held_.begin(),held_.end(),[](bool down){ return down; });
 }
 }
