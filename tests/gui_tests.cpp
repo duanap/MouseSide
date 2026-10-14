@@ -45,6 +45,15 @@ int wmain(int argc,wchar_t** argv) {
         bool repaired=false;
         CHECK(store.load(repaired).buttons[0].shortcut == ms::Shortcut{'X',ms::Ctrl});
         CHECK(!repaired);
+        const bool enabledBefore=store.load(repaired).enabled;
+        HWND toggle=GetDlgItem(window,300);
+        CHECK(toggle);
+        SendMessageW(window,WM_NEXTDLGCTL,reinterpret_cast<WPARAM>(toggle),TRUE);
+        SendMessageW(toggle,WM_KEYDOWN,VK_SPACE,0);
+        SendMessageW(toggle,WM_KEYUP,VK_SPACE,0);
+        CHECK(store.load(repaired).enabled == !enabledBefore);
+        SendMessageW(toggle,BM_CLICK,0,0);
+        CHECK(store.load(repaired).enabled == enabledBefore);
         SendMessageW(combo,CB_SETCURSEL,1,0); // restore default for visual checks
         SendMessageW(window,WM_COMMAND,MAKEWPARAM(100,CBN_SELCHANGE),reinterpret_cast<LPARAM>(combo));
         SendMessageW(window,WM_CLOSE,0,0);
@@ -54,7 +63,7 @@ int wmain(int argc,wchar_t** argv) {
         CHECK(WaitForSingleObject(first,5000)==WAIT_OBJECT_0);
         CloseHandle(first); first=nullptr;
         CHECK(!FindWindowW(L"MouseSide.Codex.Settings",nullptr));
-        std::cout << "PASS: background start, single-instance wake, immediate preset persistence, close-to-tray, clean exit\n";
+        std::cout << "PASS: background start, single-instance wake, preset persistence, keyboard/pointer toggle, close-to-tray, clean exit\n";
         return 0;
     } catch(const std::exception& e) {
         if(first) { auto window=FindWindowW(L"MouseSide.Codex.Settings",nullptr); if(window) PostMessageW(window,WM_COMMAND,9003,0); WaitForSingleObject(first,5000); CloseHandle(first); }

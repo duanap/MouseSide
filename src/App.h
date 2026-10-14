@@ -1,6 +1,7 @@
 #pragma once
 #include "Config.h"
 #include "Input.h"
+#include "Ui.h"
 #include <shellapi.h>
 namespace ms {
 inline constexpr const wchar_t* windowClass=L"MouseSide.Codex.Settings";
@@ -11,6 +12,7 @@ public:
     int run(bool background);
 private:
     static LRESULT CALLBACK windowProc(HWND window,UINT message,WPARAM w,LPARAM l);
+    static LRESULT CALLBACK controlProc(HWND control,UINT message,WPARAM w,LPARAM l,UINT_PTR id,DWORD_PTR data);
     LRESULT handle(UINT message,WPARAM w,LPARAM l);
     bool initialize();
     void layout();
@@ -29,8 +31,10 @@ private:
     int scale(int value) const { return MulDiv(value,static_cast<int>(dpi_),96); }
     HFONT makeFont(int size,int weight);
     void drawText(HDC dc,const std::wstring& text,int x,int y,int width,int height,HFONT font,COLORREF color,UINT flags=DT_LEFT|DT_VCENTER|DT_SINGLELINE);
-    void card(HDC dc,int x,int y,int width,int height);
+    void paintControl(HWND control,HDC dc);
+    void paintComboItem(const DRAWITEMSTRUCT& item);
     HINSTANCE instance_;
+    UiSession drawing_;
     HWND window_=nullptr;
     ConfigStore store_;
     Config config_;
@@ -38,6 +42,7 @@ private:
     ShortcutRecorder recorder_;
     std::array<HWND,2> combos_{};
     std::array<HWND,2> recordButtons_{};
+    std::array<bool,7> hot_{};
     HWND enabledBox_=nullptr, startupBox_=nullptr, resetButton_=nullptr;
     HFONT titleFont_=nullptr, bodyFont_=nullptr, smallFont_=nullptr, boldFont_=nullptr, keyFont_=nullptr;
     HBRUSH background_=nullptr, white_=nullptr;
