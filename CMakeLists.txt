@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(MouseSide VERSION 1.0.1 LANGUAGES CXX RC)
+project(MouseSide VERSION 1.0.2 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

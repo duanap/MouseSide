@@ -225,14 +225,15 @@ bool Load(AppConfig& cfg) {
 
     ResetToDefault(cfg);
 
-    // 损坏/缺失时按 0 处理，随后安全回落到默认值
-    const auto readInt = [&](const wchar_t* key, int fallback) {
-        const int v = GetPrivateProfileIntW(kSection, key, fallback, path.c_str());
-        return v;
+    const auto readBool = [](const wchar_t* key, bool fallback) {
+        const std::wstring value = Trim(ReadIni(key, L""));
+        if (value == L"0") return false;
+        if (value == L"1") return true;
+        return fallback;
     };
 
-    cfg.enabled = readInt(L"Enabled", 1) != 0;
-    cfg.autoStart = readInt(L"AutoStart", 0) != 0;
+    cfg.enabled = readBool(L"Enabled", true);
+    cfg.autoStart = readBool(L"AutoStart", false);
     if (cfg.autoStart != GetAutoStart()) cfg.autoStart = GetAutoStart();
 
     Mapping m4{}, m5{};
@@ -245,14 +246,45 @@ bool Load(AppConfig& cfg) {
 
 bool Save(const AppConfig& cfg) {
     const std::wstring path = Path();
-    const auto write = [&](const wchar_t* key, const std::wstring& value) {
-        return WritePrivateProfileStringW(kSection, key, value.c_str(), path.c_str()) != FALSE;
+    const std::wstring directory = path.substr(0, path.find_last_of(L'\\'));
+    wchar_t temporary[MAX_PATH]{};
+    // Use the same directory so committing is a rename on the same volume.
+    if (!GetTempFileNameW(directory.c_str(), L"mss", 0, temporary)) return false;
+    const auto fail = [&] {
+        const DWORD error = GetLastError();
+        SetFileAttributesW(temporary, FILE_ATTRIBUTE_NORMAL);
+        DeleteFileW(temporary);
+        SetLastError(error);
+        return false;
     };
-    return write(L"Version", L"1") &&
-           write(L"Enabled", cfg.enabled ? L"1" : L"0") &&
-           write(L"AutoStart", cfg.autoStart ? L"1" : L"0") &&
-           write(L"Button4", SerializeMapping(cfg.button4)) &&
-           write(L"Button5", SerializeMapping(cfg.button5));
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES) {
+        // Preserve other INI keys and the original file's write restrictions.
+        if (!CopyFileW(path.c_str(), temporary, FALSE)) return fail();
+    } else if (GetLastError() != ERROR_FILE_NOT_FOUND) {
+        return fail();
+    }
+    const auto write = [&](const wchar_t* key, const std::wstring& value) {
+        return WritePrivateProfileStringW(kSection, key, value.c_str(), temporary) != FALSE;
+    };
+    if (!write(L"Version", L"1") ||
+        !write(L"Enabled", cfg.enabled ? L"1" : L"0") ||
+        !write(L"AutoStart", cfg.autoStart ? L"1" : L"0") ||
+        !write(L"Button4", SerializeMapping(cfg.button4)) ||
+        !write(L"Button5", SerializeMapping(cfg.button5))) return fail();
+    // The profile-cache flush returns zero even when it succeeds. Check the
+    // actual file flush separately before replacing the live configuration.
+    WritePrivateProfileStringW(nullptr, nullptr, nullptr, temporary);
+    const HANDLE file = CreateFileW(temporary, GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return fail();
+    const BOOL flushed = FlushFileBuffers(file);
+    const DWORD flushError = GetLastError();
+    CloseHandle(file);
+    if (!flushed) { SetLastError(flushError); return fail(); }
+    if (!MoveFileExW(temporary, path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        return fail();
+    return true;
 }
 
 bool GetAutoStart() {

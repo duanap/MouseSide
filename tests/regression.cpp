@@ -18,7 +18,17 @@ int sendMode = 0; // 0=success, 1=failure, 2=partial first batch
 int boxes = 0, menus = 0, adds = 0;
 bool shellFails = false;
 bool versionFails = false;
+int iniWrites = 0, failIniWrite = 0;
+bool replaceFails = false;
 std::filesystem::path profile;
+BOOL WINAPI WriteIni(LPCWSTR section, LPCWSTR key, LPCWSTR value, LPCWSTR path) {
+    if (++iniWrites == failIniWrite) { SetLastError(ERROR_DISK_FULL); return FALSE; }
+    return WritePrivateProfileStringW(section, key, value, path);
+}
+BOOL WINAPI ReplaceFile(LPCWSTR from, LPCWSTR to, DWORD flags) {
+    if (replaceFails) { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
+    return MoveFileExW(from, to, flags);
+}
 SHORT WINAPI Async(int vk) { return keys[vk & 255] ? SHORT(0x8000) : 0; }
 UINT WINAPI Send(UINT count, LPINPUT inputs, int size) {
     if (size != sizeof(INPUT)) return 0;
@@ -51,6 +61,8 @@ void Pump() { MSG msg{}; while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
 }
 
 #define GetAsyncKeyState test::Async
+#define WritePrivateProfileStringW test::WriteIni
+#define MoveFileExW test::ReplaceFile
 #define SendInput test::Send
 #define MessageBoxW test::Box
 #define Shell_NotifyIconW test::Shell
@@ -106,6 +118,7 @@ int wmain() {
         test::Pump();
         std::fill(std::begin(test::keys), std::end(test::keys), false);
         test::batches.clear(); test::sendMode = 0;
+        test::iniWrites = test::failIniWrite = 0; test::replaceFails = false;
     };
     run("V4 tray double click opens settings", [&] {
         tray::Add(g_hidden, g_hInst);
@@ -314,12 +327,86 @@ int wmain() {
         test::Check(!saved, "save falsely reported success");
         AppConfig reloaded{}; config::Load(reloaded);
         test::Check(reloaded.button4.preset == PresetAction::Paste, "readonly config was altered");
+        test::Check(std::distance(std::filesystem::directory_iterator(
+                    std::filesystem::path(path).parent_path()),
+                    std::filesystem::directory_iterator{}) == 1, "readonly save left a temporary file");
     });
     run("Configuration update surfaces save failure", [&] {
         const auto path = config::Path(); SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_READONLY);
         const int before = test::boxes; ApplyConfig();
         SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
         test::Check(test::boxes == before + 1, "save failure was hidden");
+    });
+    run("Invalid Enabled values use the documented default", [&] {
+        config::ResetToDefault(g_config); test::Check(config::Save(g_config), "initial save");
+        for (const auto* invalid : {L"not-a-bool", L"2", L"-1", L""}) {
+            test::Check(WritePrivateProfileStringW(L"MouseSide", L"Enabled", invalid,
+                        config::Path().c_str()), "write invalid Enabled");
+            AppConfig loaded{}; config::Load(loaded);
+            test::Check(loaded.enabled, "invalid Enabled disabled mappings instead of using default");
+        }
+    });
+    run("Valid and missing Enabled values load correctly", [&] {
+        for (const auto* value : {L"0", L"1", static_cast<const wchar_t*>(nullptr)}) {
+            test::Check(WritePrivateProfileStringW(L"MouseSide", L"Enabled", value,
+                        config::Path().c_str()), "write Enabled");
+            AppConfig loaded{}; config::Load(loaded);
+            test::Check(loaded.enabled == (!value || value[0] == L'1'), "incorrect Enabled value");
+        }
+    });
+    run("Mid-save failure preserves the previous complete config", [&] {
+        config::ResetToDefault(g_config); test::Check(config::Save(g_config), "initial save");
+        auto changed = g_config; changed.enabled = false;
+        changed.button4.preset = PresetAction::Cut; changed.button5.preset = PresetAction::Redo;
+        test::iniWrites = 0; test::failIniWrite = 4;
+        const bool saved = config::Save(changed); test::failIniWrite = 0;
+        AppConfig loaded{}; config::Load(loaded);
+        test::Check(!saved && loaded.enabled && loaded.button4.preset == PresetAction::Paste &&
+                    loaded.button5.preset == PresetAction::Copy, "failed save persisted partial settings");
+        test::Check(std::distance(std::filesystem::directory_iterator(
+                    std::filesystem::path(config::Path()).parent_path()),
+                    std::filesystem::directory_iterator{}) == 1, "failed save left a temporary file");
+    });
+    run("Replacement failure preserves config and cleans temporary files", [&] {
+        config::ResetToDefault(g_config); test::Check(config::Save(g_config), "initial save");
+        auto changed = g_config; changed.enabled = false; changed.button4.preset = PresetAction::Cut;
+        test::replaceFails = true; const bool saved = config::Save(changed); test::replaceFails = false;
+        AppConfig loaded{}; config::Load(loaded);
+        test::Check(!saved && loaded.enabled && loaded.button4.preset == PresetAction::Paste,
+                    "replacement failure changed the original file");
+        test::Check(std::distance(std::filesystem::directory_iterator(
+                    std::filesystem::path(config::Path()).parent_path()),
+                    std::filesystem::directory_iterator{}) == 1, "replacement failure left a temporary file");
+    });
+    run("Successful save replaces all settings and preserves other INI keys", [&] {
+        test::Check(WritePrivateProfileStringW(L"Extra", L"Keep", L"yes", config::Path().c_str()),
+                    "write unrelated key");
+        auto changed = g_config; changed.enabled = false;
+        changed.button4 = Mapping{ActionKind::Custom, PresetAction::Copy, {'S', true, false, true, false}};
+        changed.button5 = Mapping{ActionKind::Original, PresetAction::Copy, {}};
+        test::Check(config::Save(changed), "save changed config");
+        AppConfig loaded{}; config::Load(loaded);
+        test::Check(!loaded.enabled && loaded.button4.kind == ActionKind::Custom &&
+                    loaded.button4.hotkey.vk == 'S' && loaded.button4.hotkey.ctrl &&
+                    loaded.button4.hotkey.shift && loaded.button5.kind == ActionKind::Original,
+                    "saved config did not round trip");
+        wchar_t extra[16]{};
+        GetPrivateProfileStringW(L"Extra", L"Keep", L"", extra, 16, config::Path().c_str());
+        test::Check(std::wstring(extra) == L"yes", "unrelated INI keys were removed");
+    });
+    run("Queued second recording cannot overwrite the first capture result", [&] {
+        config::ResetToDefault(g_config); settings::RefreshFromConfig();
+        settings::CaptureStart(settings::g_hwnd, settings::kIdCombo4);
+        CaptureKey(VK_LCONTROL, false, false); CaptureKey('S', false, false);
+        CaptureKey('S', true, false); CaptureKey(VK_LCONTROL, true, false);
+        PostMessageW(settings::g_hwnd, WM_COMMAND, MAKEWPARAM(settings::kIdBtn5Record, BN_CLICKED), 0);
+        test::Pump();
+        test::Check(g_config.button4.kind == ActionKind::Custom && g_config.button4.hotkey.vk == 'S' &&
+                    g_config.button4.hotkey.ctrl && g_config.button5.kind == ActionKind::Preset &&
+                    settings::g_capture.active, "first result used the next capture's global state");
+        CaptureKey('D', false); CaptureKey('D', true);
+        test::Check(g_config.button4.hotkey.vk == 'S' && g_config.button5.kind == ActionKind::Custom &&
+                    g_config.button5.hotkey.vk == 'D', "second recording overwrote the first mapping");
     });
     run("Settings has an exit route independent of tray", [&] {
         settings::Show(g_hidden); HWND exitButton = nullptr;

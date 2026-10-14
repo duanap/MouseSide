@@ -158,7 +158,7 @@ void ApplyConfig() {
     tray::Update(g_config.enabled);
     if (!config::Save(g_config)) {
         settings::Show(g_hidden);
-        const std::wstring text = L"无法保存配置，当前修改仅在本次运行生效。\n"
+        const std::wstring text = L"无法保存配置，当前映射修改仅在本次运行生效，原配置文件保持不变。\n"
             L"请检查文件是否只读、目录权限及磁盘空间：\n" + config::Path();
         MessageBoxW(g_hidden, text.c_str(), kAppName, MB_ICONWARNING | MB_OK);
     }

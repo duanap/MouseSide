@@ -88,6 +88,11 @@ struct CaptureState {
 };
 CaptureState g_capture{};
 
+struct CaptureResult {
+    int targetCombo;
+    Hotkey hotkey;
+};
+
 bool KeyDownNow(int vk) {
     return (GetAsyncKeyState(vk) & 0x8000) != 0;
 }
@@ -393,6 +398,7 @@ LRESULT CALLBACK CaptureKeyProc(int nCode, WPARAM wp, LPARAM lp) {
 
 void CaptureFinish(bool ok) {
     if (!g_capture.active) return;
+    const CaptureResult result{g_capture.targetCombo, g_capture.hotkey};
     g_capture.active = false;
     if (g_capture.hook) {
         UnhookWindowsHookEx(g_capture.hook);
@@ -408,7 +414,10 @@ void CaptureFinish(bool ok) {
     if (owner) {
         EnableWindow(owner, TRUE);
         SetForegroundWindow(owner);
-        PostMessageW(owner, WM_MS_CAPTURE_RESULT, ok ? 1 : 0, 0);
+        // Deliver a snapshot synchronously; a subsequent recording must not
+        // replace the result or inherit a queued cancellation.
+        SendMessageW(owner, WM_MS_CAPTURE_RESULT, ok ? 1 : 0,
+                     reinterpret_cast<LPARAM>(&result));
     }
 }
 
@@ -561,12 +570,12 @@ void OnComboChanged(int comboId) {
     ApplyConfig();
 }
 
-void OnCaptureResult(WPARAM ok) {
-    const int comboId = g_capture.targetCombo;
-    g_capture.targetCombo = 0;
-    if (ok && comboId != 0) {
-        Mapping& target = MappingForButton(comboId);
-        target = Mapping{ActionKind::Custom, PresetAction::Copy, g_capture.hotkey};
+void OnCaptureResult(WPARAM ok, LPARAM lp) {
+    const auto* result = reinterpret_cast<const CaptureResult*>(lp);
+    if (ok && result && (result->targetCombo == kIdCombo4 || result->targetCombo == kIdCombo5) &&
+        IsShortcutMainKey(result->hotkey.vk)) {
+        Mapping& target = MappingForButton(result->targetCombo);
+        target = Mapping{ActionKind::Custom, PresetAction::Copy, result->hotkey};
         ApplyConfig();
     } else {
         RefreshFromConfig();  // 取消：回到录制前的配置显示
@@ -648,7 +657,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             RefreshFromConfig();
             return 0;
         case WM_MS_CAPTURE_RESULT:
-            OnCaptureResult(wp);
+            OnCaptureResult(wp, lp);
             return 0;
         case WM_DPICHANGED: {
             g_dpi = static_cast<UINT>(HIWORD(wp));

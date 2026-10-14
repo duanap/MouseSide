@@ -19,7 +19,7 @@ namespace ms {
 
 // ---- 常量 ----
 constexpr wchar_t kAppName[]       = L"MouseSide";
-constexpr wchar_t kVersionText[]   = L"v1.0.1";
+constexpr wchar_t kVersionText[]   = L"v1.0.2";
 constexpr wchar_t kMutexName[]     = L"MouseSide_SingleInstance_5A1DC4";
 constexpr wchar_t kHiddenClass[]   = L"MouseSide_HiddenWindow";
 constexpr wchar_t kSettingsClass[] = L"MouseSide_SettingsWindow";
@@ -35,7 +35,7 @@ constexpr UINT WM_MS_SHOW_SETTINGS  = WM_APP + 2;
 constexpr UINT WM_MS_TRAY           = WM_APP + 3;
 // 隐藏窗口 -> 设置窗口：配置在其他地方（托盘菜单）被修改，刷新 UI
 constexpr UINT WM_MS_STATE_CHANGED  = WM_APP + 4;
-// 捕获窗口 -> 设置窗口：快捷键录制结束。wParam: 1=成功(lp=vk), 0=取消
+// 捕获窗口 -> 设置窗口：同步发送录制结果。wParam: 1=成功, 0=取消；lParam: 结果快照
 constexpr UINT WM_MS_CAPTURE_RESULT = WM_APP + 5;
 
 // ---- 托盘菜单命令 ID ----

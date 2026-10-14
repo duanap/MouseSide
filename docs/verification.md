@@ -1,4 +1,39 @@
-# MouseSide v1.0.1 修复验证
+# MouseSide v1.0.2 修复验证
+
+日期：2026-10-14。修复基于 main 的 `3d54e85`，保留 C++20 / Win32 架构。
+
+## 本次修复
+
+- 录制完成时同步交付独立的目标按钮和快捷键快照，避免下一次录制覆盖尚未处理的结果；无效主键不会写入映射。
+- 配置先复制到同目录临时文件，保留其他 INI 项，完整写入并刷新到磁盘后替换原文件。中途写入失败、只读文件或最终替换失败均保留原配置并清理临时文件。
+- `Enabled` 严格接受 `0` / `1`，缺失、空字符串、非数字及越界值均回落到默认启用状态。`AutoStart` 的实际状态仍以用户的 Run 注册表项为准。
+- 同步更新 README、配置 API 注释、版本号和 `dist/MouseSide.exe`。
+
+## 实际验证
+
+- 修复前：新增 6 个回归用例后，31 个通过、4 个失败，复现非法 `Enabled` 值、写入中途失败、替换失败和录制结果覆盖；原有 29 个用例保持通过。
+- 修复后：35 个回归用例通过，0 个失败。配置测试使用真实 Win32 INI API 和独立临时目录，只对写入中途失败及替换失败进行故障注入。
+- Debian WSL / MinGW-w64 GCC 14 / CMake 3.31.6：x64 Release 构建成功，没有本机 GCC 16.2 构建中出现的重复 manifest 警告。
+- `ctest --test-dir build-release --output-on-failure`：1/1 测试目标通过，包含上述 35 个用例。
+- `dist/MouseSide.exe`：429056 字节（419 KiB），x64，静态链接 C++ 运行库。导入的 8 个 DLL 均为 Windows 系统组件；manifest 资源只有一个 ID 1 实例。
+- EXE SHA-256：`EDA2625756B8FD4D6568C9236524EFAD500004AB5C4C00EFDD601BA7FF7B6ADA`。
+
+发布构建和验证命令（Debian WSL）：
+
+```sh
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_SYSTEM_NAME=Windows \
+  -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+  -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres
+cmake --build build-release --parallel 4
+ctest --test-dir build-release --output-on-failure
+```
+
+测试不修改用户配置或自启注册表项，不向使用中的应用发送快捷键。本次没有实测 MSVC、真实鼠标和剪贴板操作、无线连接切换、Explorer 实际重启、睡眠唤醒、长期资源占用或按住 Alt/Win 时的目标应用副作用。
+
+## v1.0.1 历史验证记录
+
+以下为此前版本的验证结果，其中 EXE 大小和用例数量对应 v1.0.1，不代表当前发布产物。
 
 日期：2026-10-13。
 
