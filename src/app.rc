@@ -1,6 +1,0 @@
-#include <windows.h>
-#include "resource.h"
-
-IDI_APP        ICON           "app.ico"
-IDI_APP_PAUSED ICON           "app_paused.ico"
-IDR_MANIFEST   RT_MANIFEST    "app.manifest"

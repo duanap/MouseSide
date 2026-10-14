@@ -1,0 +1,44 @@
+/*
+ * MouseSide 资源脚本
+ *
+ * 说明：
+ *   - ICON 与 RT_MANIFEST 均按「与 .rc 同目录」的裸文件名引用，
+ *     CMake 同时把 assets/ 加入了资源编译器包含路径，两种方式都能命中。
+ *   - 若 MouseSide.ico 缺失，可执行 tools/make_icon.py 重新生成。
+ */
+
+#define IDI_APPICON 101
+
+IDI_APPICON ICON "MouseSide.ico"
+
+/* CREATEPROCESS_MANIFEST_RESOURCE_ID = 1, RT_MANIFEST = 24 */
+1 24 "app.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEFLAGSMASK  0x3fL
+ FILEFLAGS      0x0L
+ FILEOS         0x40004L
+ FILETYPE       0x1L
+ FILESUBTYPE    0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName",      "MouseSide\0"
+            VALUE "FileDescription",  "MouseSide\0"
+            VALUE "FileVersion",      "1.0.0.0\0"
+            VALUE "InternalName",     "MouseSide\0"
+            VALUE "LegalCopyright",   "MouseSide\0"
+            VALUE "OriginalFilename", "MouseSide.exe\0"
+            VALUE "ProductName",      "MouseSide\0"
+            VALUE "ProductVersion",   "1.0.0.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END

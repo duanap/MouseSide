@@ -1,4 +1,36 @@
+# ---- 构建产物 ----
 build/
-build-*/
 out/
-.cache/
+cmake-build-*/
+bin/
+[Vv]s[0-9]*/
+
+# ---- Visual Studio / MSVC ----
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+*.sln
+*.vcxproj
+*.vcxproj.filters
+CMakeUserPresets.json
+
+# ---- 编译中间产物 ----
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.idb
+*.exe
+*.dll
+*.res
+*.tlog
+*.log
+
+# ---- 其它 ----
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,112 +1,97 @@
+// MouseHook.cpp
+
 #include "MouseHook.h"
 
+#include "KeyMapper.h"
+
 namespace ms {
-namespace mousehook {
 
-namespace {
+MouseHook* MouseHook::s_active = nullptr;
 
-HHOOK g_hook = nullptr;
-HWND g_target = nullptr;
-bool g_enabled = false;
-Mapping g_mappings[2]{};
-// 记录该键的按下事件是否被拦截，保证对应的松开事件也被拦截，
-// 避免浏览器收到"孤儿" up 事件。
-bool g_blocked[2] = {false, false};
-bool g_pressed[2] = {false, false};
-
-bool ShouldBlock(int index) {
-    if (!g_enabled) return false;
-    return g_mappings[index].kind != ActionKind::Original;
+MouseHook::~MouseHook() {
+    Uninstall();
 }
 
-int ButtonIndexFromData(DWORD mouseData) {
-    const WORD button = HIWORD(mouseData);
-    if (button == XBUTTON1) return 0;
-    if (button == XBUTTON2) return 1;
-    return -1;
+void MouseHook::SetIntercept(int buttonIndex, bool intercept) noexcept {
+    if (buttonIndex >= 0 && buttonIndex < 2) {
+        m_intercept[buttonIndex] = intercept;
+    }
 }
 
-LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    if (nCode == HC_ACTION) {
+LRESULT CALLBACK MouseHook::HookProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    MouseHook* self = s_active;
+
+    if (nCode == HC_ACTION && self != nullptr && self->m_enabled) {
         const auto* info = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
 
-        bool handled = false;
-        switch (wParam) {
-            case WM_XBUTTONDOWN:
-            case WM_NCXBUTTONDOWN: {
-                const int index = ButtonIndexFromData(info->mouseData);
-                if (index >= 0) {
-                    if (g_pressed[index]) {
-                        handled = g_blocked[index];
-                        break;
-                    }
-                    g_pressed[index] = true;
-                    bool block = ShouldBlock(index);
-                    if (block && g_mappings[index].kind != ActionKind::Disabled) {
-                        // 钩子回调保持轻量：只投递消息，由窗口过程执行模拟输入
-                        block = g_target && PostMessageW(g_target, WM_MS_EXEC_MAPPING,
-                                                       static_cast<WPARAM>(index), 0);
-                    }
-                    g_blocked[index] = block;
-                    handled = block;
+        // 放行本程序自己注入的事件。
+        // 「浏览器后退 / 前进」动作需要重放 XBUTTON 事件，若不识别标记会形成递归拦截。
+        if (info->dwExtraInfo != kInjectedMarker) {
+            const bool isDown = (wParam == WM_XBUTTONDOWN) || (wParam == WM_NCXBUTTONDOWN);
+            const bool isUp   = (wParam == WM_XBUTTONUP)   || (wParam == WM_NCXBUTTONUP);
+
+            if (isDown || isUp) {
+                const WORD xButton = HIWORD(info->mouseData);
+
+                int index = -1;
+                if (xButton == XBUTTON1) {
+                    index = 0;  // 第四按钮
+                } else if (xButton == XBUTTON2) {
+                    index = 1;  // 第五按钮
                 }
-                break;
-            }
-            case WM_XBUTTONUP:
-            case WM_NCXBUTTONUP:
-            case WM_XBUTTONDBLCLK:
-            case WM_NCXBUTTONDBLCLK: {
-                const int index = ButtonIndexFromData(info->mouseData);
-                if (index >= 0) {
-                    handled = g_blocked[index];
-                    if (wParam == WM_XBUTTONUP || wParam == WM_NCXBUTTONUP) {
-                        g_blocked[index] = false;
-                        g_pressed[index] = false;
+
+                if (index >= 0 && self->m_intercept[index]) {
+                    if (isDown && self->m_onTrigger) {
+                        // 只做「投递」，实际注入交给消息循环，保证回调保持轻量
+                        self->m_onTrigger(index);
                     }
+                    // 按下与松开一并吞掉，彻底屏蔽原始前进 / 后退行为
+                    return 1;
                 }
-                break;
             }
-            default:
-                break;
         }
-        if (handled) return 1;
     }
-    return CallNextHookEx(g_hook, nCode, wParam, lParam);
+
+    // 其余事件（移动、左中右键、滚轮等）原样放行
+    return CallNextHookEx(nullptr, nCode, wParam, lParam);
 }
 
-}  // namespace
-
-bool Install(HWND target) {
-    if (g_hook) return true;
-    g_target = target;
-    g_blocked[0] = g_blocked[1] = false;
-    g_pressed[0] = g_pressed[1] = false;
-    g_hook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc, nullptr, 0);
-    return g_hook != nullptr;
-}
-
-void Uninstall() {
-    if (g_hook) {
-        UnhookWindowsHookEx(g_hook);
-        g_hook = nullptr;
+bool MouseHook::Install() {
+    if (m_hook != nullptr) {
+        return true;
     }
-    g_blocked[0] = g_blocked[1] = false;
-    g_pressed[0] = g_pressed[1] = false;
+
+    s_active = this;
+    m_hook = SetWindowsHookExW(WH_MOUSE_LL,
+                               &MouseHook::HookProc,
+                               GetModuleHandleW(nullptr),
+                               0);
+    if (m_hook == nullptr) {
+        m_lastError = GetLastError();
+        s_active    = nullptr;
+        return false;
+    }
+
+    m_lastError = ERROR_SUCCESS;
+    return true;
 }
 
-bool Installed() {
-    return g_hook != nullptr;
+void MouseHook::Uninstall() {
+    if (m_hook != nullptr) {
+        UnhookWindowsHookEx(m_hook);
+        m_hook = nullptr;
+    }
+    if (s_active == this) {
+        s_active = nullptr;
+    }
 }
 
-void SetEnabled(bool enabled) {
-    g_enabled = enabled;
-    // A consumed down must keep its paired up consumed across a pause/update.
+bool MouseHook::Refresh() {
+    if (m_hook == nullptr) {
+        return false;  // 未安装时不自作主张地安装
+    }
+    Uninstall();
+    return Install();
 }
 
-void SetMappings(const Mapping& m4, const Mapping& m5) {
-    g_mappings[0] = m4;
-    g_mappings[1] = m5;
-}
-
-}  // namespace mousehook
 }  // namespace ms
