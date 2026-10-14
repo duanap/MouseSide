@@ -23,28 +23,29 @@ Windows 11 x64；独立 EXE；无浏览器内核、无网络、无额外服务�
 
 Files: CMakeLists.txt, src/Model.*, src/Config.*, tests/core_tests.cpp。
 Interfaces: Action、Shortcut、Config、ButtonState；ConfigStore::load/save。
-- [ ] 写默认值、无效键码、损坏字段、点击去重、暂停中途切换、配置往返的失败测试。
-- [ ] 运行测试确认失败，然后实现并通过 CTest。
+- [x] 写默认值、无效键码、损坏字段、点击去重、暂停中途切换、配置往返的失败测试。
+- [x] 运行测试确认失败，然后实现并通过 CTest。
 
 ## Task 2: Input
 
 Files: src/Input.*, tests/input_tests.cpp。
 Interfaces: InputEngine::start/update/stop；BuildKeySequence；ShortcutRecorder。
-- [ ] 编写键盘序列及真实 Win32 接收器集成测试，验证失败。
-- [ ] 实现钩子线程、消息投递、SendInput、按键清理和录制。
-- [ ] 运行 CTest；测试隔离窗口和配置，自动清理。
+- [x] 编写键盘序列及真实 Win32 接收器集成测试，验证失败。
+- [x] 实现钩子线程、消息投递、SendInput、按键清理和录制。
+- [x] 运行 CTest；测试隔离窗口和配置，自动清理。
 
 ## Task 3: Application / UI
 
 Files: src/App.*, src/main.cpp, res/app.rc, res/app.manifest, scripts/*。
 Interfaces: App::run，配置变化后持久化并更新输入线程。
-- [ ] 编写独立 GUI 生命周期测试（后台启动、重复启动、关闭隐藏、退出）。
-- [ ] 实现原生卡片界面、DPI、托盘、自启、唤醒、错误消息。
-- [ ] 编译 Release，运行测试，截图检查视觉，测量体积/内存/空闲 CPU。
+- [x] 编写独立 GUI 生命周期测试（后台启动、重复启动、关闭隐藏、退出）。
+- [x] 实现原生卡片界面、DPI、托盘、自启、唤醒、错误消息。
+- [x] 编译 Release，运行测试，截图检查视觉，测量体积/内存/空闲 CPU。
 
 ## Task 4: Review / Delivery
 
 Files: README.md, config.default.ini, docs/verification.md, dist/MouseSide.exe。
-- [ ] 审查 P0/P1 覆盖和故障路径，修复重要发现并重跑测试。
-- [ ] 写构建和使用说明、配置格式、已验证与待人工验收项。
-- [ ] 提交 codex 分支，交付 EXE，验证 Git 历史独立及工作区状态。
+- [x] 审查 P0/P1 覆盖和故障路径，修复重要发现并重跑测试。
+- [x] 写构建和使用说明、配置格式、已验证与待人工验收项。
+- [x] 提交 codex 分支，交付 EXE，验证 Git 历史独立及工作区状态。
+

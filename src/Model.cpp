@@ -95,6 +95,10 @@ ButtonDecision ButtonState::onUp() {
 RecordingDecision RecordingState::process(unsigned key,bool down) {
     if(key>=256) return RecordingDecision::Pass;
     const bool wasHeld=held_[key];
+    if(down && key==VK_ESCAPE) {
+        held_[key]=true; finishing_=true; shortcut_.reset(); invalid_=false;
+        return RecordingDecision::Swallow;
+    }
     if((down && finishing_ && !wasHeld) || (!down && !wasHeld)) return RecordingDecision::Pass;
     held_[key]=down;
     if(down && !wasHeld && !isModifier(key) && !finishing_) {

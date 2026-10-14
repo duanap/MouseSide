@@ -9,6 +9,13 @@ KeySequence buildKeySequence(Shortcut shortcut, const std::array<bool,256>& held
     std::array<bool,8> released{};
     std::array<unsigned,4> added{};
     unsigned addedCount = 0;
+    bool maskMenus=false;
+    for(unsigned key : modifierKeys)
+        if(held[key] && !(shortcut.modifiers & modifierFor(key)) && (modifierFor(key) & (Alt|Win))) maskMenus=true;
+    // Reserved no-mapping VK: prevent a bare Alt/Win release from opening a menu.
+    // https://www.autohotkey.com/docs/v2/lib/A_MenuMaskKey.htm
+    auto mask=[&] { add(0xFF,false); add(0xFF,true); };
+    if(maskMenus) mask();
     if (held[shortcut.key]) add(shortcut.key,true);
     for (unsigned i=0; i<modifierKeys.size(); ++i) {
         const unsigned key = modifierKeys[i];
@@ -23,10 +30,11 @@ KeySequence buildKeySequence(Shortcut shortcut, const std::array<bool,256>& held
             add(key,false); added[addedCount++]=key;
         }
     }
-    add(shortcut.key,false); add(shortcut.key,true);
+    add(shortcut.key,false);
+    if(!held[shortcut.key]) add(shortcut.key,true);
     while (addedCount) add(added[--addedCount],true);
     for (unsigned i=0; i<modifierKeys.size(); ++i) if (released[i]) add(modifierKeys[i],false);
-    if (held[shortcut.key]) add(shortcut.key,false);
+    if(maskMenus) mask(); // also suppress menu activation on the eventual physical release
     return sequence;
 }
 static INPUT keyboardInput(KeyEvent key) {

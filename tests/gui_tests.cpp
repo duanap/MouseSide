@@ -13,6 +13,7 @@ struct ConfigBackup {
 };
 static PROCESS_INFORMATION launch(const std::wstring& exe,const wchar_t* args) {
     STARTUPINFOW startup{}; startup.cb=sizeof(startup);
+    startup.dwFlags=STARTF_USESHOWWINDOW; startup.wShowWindow=SW_HIDE;
     PROCESS_INFORMATION process{};
     std::wstring command=L"\""+exe+L"\" "+args;
     CHECK(CreateProcessW(exe.c_str(),command.data(),nullptr,nullptr,FALSE,0,nullptr,nullptr,&startup,&process));

@@ -35,6 +35,10 @@ int main() {
     record.process(VK_LCONTROL,false);
     CHECK(record.complete() && !record.shortcut());
     record = {};
+    record.process(VK_LCONTROL,true); record.process('S',true); record.process('S',false);
+    record.process(VK_ESCAPE,true); record.process(VK_ESCAPE,false); record.process(VK_LCONTROL,false);
+    CHECK(record.complete() && !record.shortcut());
+    record = {};
     record.process(VK_ESCAPE,true); record.process(VK_ESCAPE,false);
     CHECK(record.complete() && !record.shortcut());
     record = {};

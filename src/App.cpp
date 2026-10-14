@@ -219,6 +219,8 @@ void App::reset() {
 }
 void App::show() {
     ShowWindow(window_,IsIconic(window_) ? SW_RESTORE : SW_SHOW);
+    // Explicit user wake must override a launcher's STARTF_USESHOWWINDOW/SW_HIDE.
+    SetWindowPos(window_,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_SHOWWINDOW);
     SetForegroundWindow(window_);
 }
 bool App::addTray() {
